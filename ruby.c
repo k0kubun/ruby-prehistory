@@ -6,7 +6,7 @@
   $Date: 1995/01/10 10:42:51 $
   created at: Tue Aug 10 12:47:31 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
@@ -18,19 +18,7 @@
 #include <sys/stat.h>
 #include <signal.h>
 
-#include "getopt.h"
-
 static int version, copyright;
-
-static struct option long_options[] =
-{
-    {"debug", 0, 0, 'd'},
-    {"yydebug", 0, 0, 'y'},
-    {"verbose", 0, 0, 'v'},
-    {"version", 0, &version, 1},
-    {"copyright", 0, &copyright, 1},
-    {0, 0, 0, 0}
-};
 
 int debug = 0;
 int verbose = 0;
@@ -52,7 +40,7 @@ char *rb_dln_argv0;
 #endif
 
 static void load_stdin();
-void rb_load_file();
+static void load_file();
 
 static int do_loop = FALSE, do_print = FALSE;
 static int do_check = FALSE, do_line = FALSE;
@@ -67,12 +55,11 @@ proc_options(argcp, argvp)
 {
     int argc = *argcp;
     char **argv = *argvp;
+    int script_given, do_search;
+    char *s;
+
     extern VALUE rb_load_path;
-    extern char *optarg;
-    extern int optind;
-    int c, i, j, script_given, do_search, opt_index;
     extern VALUE RS, ORS, FS;
-    char *src;
 
     if (argc == 0) return;
 
@@ -80,113 +67,154 @@ proc_options(argcp, argvp)
     script_given = FALSE;
     do_search = FALSE;
 
-    optind = 0;
-    while ((c = getopt_long(argc, argv, "+acC:de:F:i:I:lnpR:svxX:yS",
-			    long_options, &opt_index)) != EOF) {
-	switch (c) {
+    for (argc--,argv++; argc > 0; argc--,argv++) {
+	if (argv[0][0] != '-' || !argv[0][1]) break;
+
+	s = argv[0]+1;
+      reswitch:
+	switch (*s) {
+	  case 'a':
+	    do_split = TRUE;
+	    s++;
+	    goto reswitch;
+	    
 	  case 'p':
 	    do_print = TRUE;
 	    /* through */
 	  case 'n':
 	    do_loop = TRUE;
-	    break;
+	    s++;
+	    goto reswitch;
 
 	  case 'd':
 	    debug = TRUE;
-	    break;
+	    s++;
+	    goto reswitch;
 
 	  case 'y':
 	    yydebug = 1;
-	    break;
+	    s++;
+	    goto reswitch;
 
 	  case 'v':
 	    verbose = TRUE;
 	    show_version();
-	    break;
-
-	  case 'e':
-	    script_given++;
-	    if (script == 0) script = "-e";
-	    lex_setsrc("-e", optarg, strlen(optarg));
-	    yyparse();
-	    break;
-
-	  case 'i':
-	    inplace = strdup(optarg);
-	    break;
+	    s++;
+	    goto reswitch;
 
 	  case 'c':
 	    do_check = TRUE;
-	    break;
-
-	  case 'x':
-	    xflag = TRUE;
-	    break;
-
-	  case 'X':
-	    if (chdir(optarg) < 0)
-		Fatal("Can't chdir to %s", optarg);
-	    break;
+	    s++;
+	    goto reswitch;
 
 	  case 's':
 	    sflag = TRUE;
-	    break;
+	    s++;
+	    goto reswitch;
 
 	  case 'l':
 	    do_line = TRUE;
 	    ORS = RS;
+	    s++;
+	    goto reswitch;
+	    
+	  case 'S':
+	    do_search = TRUE;
+	    s++;
+	    goto reswitch;
+
+	  case 'e':
+	    script_given++;
+	    if (script == 0) script = "-e";
+	    if (argv[1]) {
+		lex_setsrc("-e", argv[1], strlen(argv[1]));
+		argc--,argv++;
+	    }
+	    else {
+		lex_setsrc("-e", "", 0);
+	    }
+	    yyparse();
 	    break;
 
-	  case 'R':
-	    {
-		char *p = optarg;
+	  case 'i':
+	    inplace = strdup(s+1);
+	    break;
 
-		while (*p) {
-		    if (*p < '0' || '7' < *p) {
-			break;
-		    }
-		    p++;
-		}
-		if (*p) {
-		    RS = str_new2(optarg);
-		}
-		else {
-		    int i = strtoul(optarg, Qnil, 8);
-
-		    if (i == 0) RS = str_new(0, 0);
-		    else if (i > 0xff) RS = Qnil;
-		    else {
-			char c = i;
-			RS = str_new(&c, 1);
-		    }
-		}
+	  case 'x':
+	    xflag = TRUE;
+	    s++;
+	    if (*s && chdir(s) < 0) {
+		Fatal("Can't chdir to %s", s);
 	    }
 	    break;
 
 	  case 'F':
-	    FS = str_new2(optarg);
+	    FS = str_new2(s+1);
 	    break;
 
-	  case 'a':
-	    do_split = TRUE;
-	    break;
-
-	  case 'C':
-	    rb_set_kanjicode(optarg);
-	    break;
-
-	  case 'S':
-	    do_search = TRUE;
-	    break;
+	  case 'K':
+	    s++;
+	    rb_set_kanjicode(s);
+	    s++;
+	    goto reswitch;
 
 	  case 'I':
-	    ary_unshift(rb_load_path, str_new2(optarg));
+	    ary_unshift(rb_load_path, str_new2(s+1));
+	    break;
+
+	  case '0':
+	    {
+		int numlen;
+		int v;
+		char c;
+
+		v = scan_oct(s, 4, &numlen);
+		s += numlen;
+		if (v > 0377) RS = Qnil;
+		else if (v == 0 && numlen >= 2) {
+		    RS = str_new2("\n\n");
+		}
+		else {
+		    c = v & 0xff;
+		    RS = str_new(&c, 1);
+		}
+	    }
+	    goto reswitch;
+
+	  case 'u':
+	  case 'U':
+
+	  case '-':
+	    if (!s[1]) {
+		argc--,argv++;
+		goto switch_end;
+	    }
+	    s++;
+	    if (strcmp("copyright", s) == 0)
+		copyright = 1;
+	    else if (strcmp("debug", s) == 0)
+		debug = 1;
+	    else if (strcmp("version", s) == 0)
+		version = 1;
+	    else if (strcmp("verbose", s) == 0)
+		verbose = 1;
+	    else if (strcmp("yydebug", s) == 0)
+		yydebug = 1;
+	    else {
+		Fatal("Unrecognized long option: --%s",s);
+	    }
 	    break;
 
 	  default:
+	    Fatal("Unrecognized switch: -%s",s);
+
+	  case 0:
 	    break;
 	}
     }
+
+  switch_end:
+    if (*argvp[0] == Qnil) return;
 
     if (version) {
 	show_version();
@@ -196,28 +224,28 @@ proc_options(argcp, argvp)
 	show_copyright();
     }
 
-    if (argv[0] == Qnil) return;
+    rb_setup_kcode();
 
     if (script_given == 0) {
-	if (argc == optind) {	/* no more args */
+	if (argc == 0) {	/* no more args */
 	    if (verbose) exit(0);
 	    script = "-";
 	    load_stdin();
 	}
 	else {
-	    script = argv[optind];
+	    script = argv[0];
 	    if (do_search) {
 		script = dln_find_file(script, getenv("PATH"));
-		if (!script) script = argv[optind];
+		if (!script) script = argv[0];
 	    }
-	    rb_load_file(script);
-	    optind++;
+	    load_file(script, 1);
+	    argc--,argv++;
 	}
     }
 
     xflag = FALSE;
-    *argvp += optind;
-    *argcp -= optind;
+    *argvp = argv;
+    *argcp = argc;
 
     if (sflag) {
 	char *s;
@@ -239,15 +267,17 @@ proc_options(argcp, argvp)
 	}
 	*argcp = argc; *argvp = argv;
     }
+
 }
 
 static void
-readin(fd, fname)
+readin(fd, fname, script)
     int fd;
     char *fname;
+    int script;
 {
     struct stat st;
-    char *ptr, *p, *pend;
+    char *ptr, *p, *pend, *s;
 
     if (fstat(fd, &st) < 0) rb_sys_fail(fname);
     if (!S_ISREG(st.st_mode))
@@ -259,39 +289,62 @@ readin(fd, fname)
 	rb_sys_fail(fname);
     }
     pend = p + st.st_size;
-    if (xflag) {
-	char *s = p;
+    *pend = '\0';
 
-	*pend = '\0';
-	xflag = FALSE;
-	while (p < pend) {
-	    while (s < pend && *s != '\n') s++;
-	    if (*s != '\n') break;
-	    *s = '\0';
-	    if (p[0] == '#' && p[1] == '!' && strstr(p, "ruby")) {
-		if (p = strstr(p, "ruby -")) {
-		    int argc; char *argv[2]; char **argvp = argv;
-		    argc = 2; argv[0] = Qnil; argv[1] = p + 5;
-		    proc_options(&argc, &argvp);
+    if (script) {
+	if (xflag) {
+	    xflag = FALSE;
+	    while (p < pend) {
+		if (p[0] == '#' && p[1] == '!') {
+		    char *s = p;
+		    while (s < pend && *s != '\n') s++;
+		    if (*s == '\n') {
+			*s = '\0';
+			if (strstr(p, "ruby")) {
+			    *s = '\n';
+			    goto start_read;
+			}
+		    }
+		    p = s + 1;
 		}
-		xflag = TRUE;
-		p = s + 1;
-		goto start_read;
+		else {
+		    while (p < pend && *p++ != '\n')
+			;
+		    if (p >= pend) break;
+		}
 	    }
-	    p = s + 1;
+	    free(ptr);
+	    Fail("No Ruby script found in input");
 	}
-	free(ptr);
-	Fail("No Ruby script found in input");
+
+      start_read:
+	if (p[0] == '#' && p[1] == '!') {
+	    char *s = p, *q;
+
+	    while (s < pend && *s != '\n') s++;
+	    if (*s == '\n') {
+		*s = '\0';
+		if (q = strstr(p, "ruby -")) {
+		    int argc; char *argv[2]; char **argvp = argv;
+		    argc = 2; argv[0] = Qnil; argv[1] = q + 5;
+		    proc_options(&argc, &argvp);
+		    p = s + 1;
+		}
+		else {
+		    *s = '\n';
+		}
+	    }
+	}
     }
-  start_read:
     lex_setsrc(fname, p, pend - p);
     yyparse();
     free(ptr);
 }
 
-void
-rb_load_file(fname)
+static void
+load_file(fname, script)
     char *fname;
+    int script;
 {
     int fd;
     char *ptr;
@@ -303,8 +356,15 @@ rb_load_file(fname)
 
     fd = open(fname, O_RDONLY, 0);
     if (fd < 0) rb_sys_fail(fname);
-    readin(fd, fname);
+    readin(fd, fname, script);
     close(fd);
+}
+
+void
+rb_load_file(fname)
+    char *fname;
+{
+    load_file(fname, 0);
 }
 
 static void
@@ -324,9 +384,6 @@ load_stdin()
 	putc(c, f);
     }
     fclose(f);
-
-    if (fd < 0) rb_sys_fail(buf);
-
     readin(fd, "-");
 }
 
@@ -392,8 +449,6 @@ ruby_init0(argc, argv, envp)
     int i;
 
     origargc = argc; origargv = argv; origenvp = envp;
-
-    rb_call_inits();
 
     rb_define_variable("$@", &errat, Qnil, Qnil, 0);
     errat = str_new2(argv[0]);

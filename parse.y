@@ -24,9 +24,9 @@
 #define is_local_id(id) (is_id_nonop(id)&&((id)&ID_SCOPE_MASK)==ID_LOCAL)
 #define is_global_id(id) (is_id_nonop(id)&&((id)&ID_SCOPE_MASK)==ID_GLOBAL)
 #define is_instance_id(id) (is_id_nonop(id)&&((id)&ID_SCOPE_MASK)==ID_INSTANCE)
-#define is_variable_id(id) (is_id_nonop(id)&&((id)&ID_VARMASK))
 #define is_attrset_id(id) (is_id_nonop(id)&&((id)&ID_SCOPE_MASK)==ID_ATTRSET)
 #define is_const_id(id) (is_id_nonop(id)&&((id)&ID_SCOPE_MASK)==ID_CONST)
+#define is_nthref_id(id) (((id)&ID_SCOPE_MASK)==ID_NTHREF)
 
 struct op_tbl {
     ID token;
@@ -47,8 +47,9 @@ static enum lex_state {
     EXPR_FNAME,			/* ignore newline, +/- is a operator. */
 } lex_state;
 
-static ID cur_class = Qnil, cur_mid = Qnil;
-static int in_module, in_single;
+static int class_nest = 0;
+static int in_single = 0;
+static ID cur_mid = Qnil;
 
 static int value_expr();
 static NODE *cond();
@@ -66,16 +67,20 @@ static NODE *asignable();
 static NODE *aryset();
 static NODE *attrset();
 
-static void push_local();
-static void pop_local();
-static int local_cnt();
-static int local_id();
-static ID *local_tbl();
+static void local_push();
+static void local_pop();
+static int  local_cnt();
+static int  local_id();
+static ID  *local_tbl();
+
+#define cref_push() NEW_CREF(0)
+static void cref_pop();
+static NODE *cref_list;
 
 struct global_entry* rb_global_entry();
 
-static void init_top_local();
-static void setup_top_local();
+static void top_local_init();
+static void top_local_setup();
 %}
 
 %union {
@@ -89,7 +94,10 @@ static void setup_top_local();
 	MODULE
 	DEF
 	UNDEF
-	INCLUDE
+	BEGIN
+	RESQUE
+	ENSURE
+	END
 	IF
 	THEN
 	ELSIF
@@ -99,10 +107,6 @@ static void setup_top_local();
 	WHILE
 	FOR
 	IN
-	PROTECT
-	RESQUE
-	ENSURE
-	END
 	REDO
 	BREAK
 	CONTINUE
@@ -121,16 +125,16 @@ static void setup_top_local();
 	WHILE_MOD
 	ALIAS
 
-%token <id>   IDENTIFIER GVAR IVAR CONSTANT
-%token <val>  INTEGER FLOAT STRING XSTRING REGEXP GLOB
-%token <node> STRING2 XSTRING2 DREGEXP DGLOB
+%token <id>   IDENTIFIER GVAR IVAR CONSTANT NTH_REF
+%token <val>  INTEGER FLOAT STRING XSTRING REGEXP
+%token <node> STRING2 XSTRING2 DREGEXP
 
-%type <node> singleton inc_list
+%type <node> singleton
 %type <val>  literal numeric
 %type <node> compexpr exprs expr arg primary var_ref
 %type <node> if_tail opt_else case_body cases resque ensure
 %type <node> call_args call_args0 args args2 opt_args
-%type <node> f_arglist f_args assoc_list assocs assoc
+%type <node> f_arglist f_args array assoc_list assocs assoc
 %type <node> mlhs mlhs_head mlhs_tail lhs iter_var opt_iter_var
 %type <id>   superclass variable symbol
 %type <id>   fname op rest_arg
@@ -182,12 +186,12 @@ static void setup_top_local();
 %%
 program		:  {
 			lex_state = EXPR_BEG;
-                        init_top_local();
+                        top_local_init();
 		    }
 		  compexpr
 		    {
 			eval_tree = block_append(eval_tree, $2);
-                        setup_top_local();
+                        top_local_setup();
 		    }
 
 compexpr	: exprs opt_term
@@ -240,7 +244,7 @@ expr		: mlhs '=' args2
 		    }
 		| IDENTIFIER call_args0
 		    {
-			$$ = NEW_CALL(Qnil, $1, $2);
+			$$ = NEW_FCALL($1, $2);
 		    }
 		| primary '.' IDENTIFIER call_args0
 		    {
@@ -260,12 +264,6 @@ expr		: mlhs '=' args2
 		| ALIAS fname {lex_state = EXPR_FNAME;} fname
 		    {
 		        $$ = NEW_ALIAS($2, $4);
-		    }
-		| INCLUDE inc_list
-		    {
-			if (cur_mid || in_single)
-			    Error("include appeared in method definition");
-			$$ = $2;
 		    }
 		| expr IF_MOD expr
 		    {
@@ -317,7 +315,7 @@ lhs		: variable
 		    {
 			$$ = asignable($1, Qnil);
 		    }
-		| primary '[' opt_args rbracket
+		| primary '[' opt_args opt_nl rbracket
 		    {
 			$$ = aryset($1, $3, Qnil);
 		    }
@@ -326,26 +324,8 @@ lhs		: variable
 			$$ = attrset($1, $3, Qnil);
 		    }
 
-inc_list	: IDENTIFIER
-		    {
-			$$ = NEW_INC($1);
-		    }
-		| inc_list comma IDENTIFIER
-		    {
-			$$ = block_append($1, NEW_INC($3));
-		    }
-		| error
-		    {
-			lex_state = EXPR_BEG;
-			$$ = Qnil;
-		    }
-		| inc_list comma error
-		    {
-			lex_state = EXPR_BEG;
-			$$ = $1;
-		    }
-
 fname		: IDENTIFIER
+		| CONSTANT
 		| op
 		    {
 			lex_state = EXPR_END;
@@ -383,9 +363,9 @@ arg		: variable '=' arg
 			value_expr($3);
 			$$ = asignable($1, $3);
 		    }
-		| primary '[' opt_args rbracket '=' arg
+		| primary '[' opt_args opt_nl rbracket '=' arg
 		    {
-			$$ = aryset($1, $3, $6);
+			$$ = aryset($1, $3, $7);
 		    }
 		| primary '.' IDENTIFIER '=' arg
 		    {
@@ -410,12 +390,12 @@ arg		: variable '=' arg
 			}
 		  	$$ = asignable($1, call_op(val, $2, 1, $3));
 		    }
-		| primary '[' opt_args rbracket OP_ASGN arg
+		| primary '[' opt_args opt_nl rbracket OP_ASGN arg
 		    {
-			NODE *args = NEW_LIST($6);
+			NODE *args = NEW_LIST($7);
 
 			if ($3) list_concat(args, $3);
-			$$ = NEW_OP_ASGN1($1, $5, args);
+			$$ = NEW_OP_ASGN1($1, $6, args);
 		    }
 		| primary '.' IDENTIFIER OP_ASGN arg
 		    {
@@ -571,8 +551,8 @@ call_args	: /* none */
 		    {
 			$$ = Qnil;
 		    }
-		| call_args0
-		| '*' arg
+		| call_args0 opt_nl
+		| '*' arg opt_nl
 		    {
 			$$ = $2;
 		    }
@@ -618,6 +598,12 @@ args2		: args
 			}
 		    }
 
+array		: /* none */
+		    {
+			$$ = Qnil;
+		    }
+		| args trailer
+
 primary		: literal
 		    {
 			$$ = NEW_LIT($1);
@@ -633,7 +619,6 @@ primary		: literal
 		    }
 		| XSTRING2
 		| DREGEXP
-		| DGLOB
 		| var_ref
 		| SUPER '(' call_args rparen
 		    {
@@ -647,12 +632,12 @@ primary		: literal
 			    Error("super called outside of method");
 			$$ = NEW_ZSUPER();
 		    }
-		| primary '[' opt_args rbracket
+		| primary '[' opt_args opt_nl rbracket
 		    {
 			value_expr($1);
 			$$ = NEW_CALL($1, AREF, $3);
 		    }
-		| LBRACK opt_args rbracket
+		| LBRACK array rbracket
 		    {
 			if ($2 == Qnil)
 			    $$ = NEW_ZARRAY(); /* zero length array*/
@@ -718,14 +703,15 @@ primary		: literal
 		| primary '{' opt_iter_var '|' compexpr rbrace
 		    {
 			if (nd_type($1) == NODE_LVAR
-		            || nd_type($1) == NODE_MVAR) {
-			    $1 = NEW_CALL(Qnil, $1->nd_vid, Qnil);
+		            || nd_type($1) == NODE_LVAR2
+		            || nd_type($1) == NODE_CVAR) {
+			    $1 = NEW_FCALL($1->nd_vid, Qnil);
 			}
 			$$ = NEW_ITER($3, $1, $5);
 		    }
 		| IDENTIFIER '(' call_args rparen
 		    {
-			$$ = NEW_CALL(Qnil, $1, $3);
+			$$ = NEW_FCALL($1, $3);
 		    }
 		| primary '.' IDENTIFIER '(' call_args rparen
 		    {
@@ -762,81 +748,85 @@ primary		: literal
 			value_expr($4);
 			$$ = NEW_FOR($2, $4, $6);
 		    }
-		| PROTECT
+		| BEGIN
 		  compexpr
 		  resque
 		  ensure
 		  END
 		    {
 			if ($3 == Qnil && $4 == Qnil) {
-			    Warning("useless protect clause");
 			    $$ = $2;
 			}
 			else {
-			    $$ = NEW_PROT($2, $3, $4);
+			    $$ = NEW_BEGIN($2, $3, $4);
 			}
 		    }
-		| LPAREN compexpr rparen
+		| LPAREN expr 
+		  opt_nl
+		  rparen
 		    {
 			$$ = $2;
 		    }
-		| CLASS IDENTIFIER superclass
+		| CLASS CONSTANT superclass
 		    {
-			if (cur_class || cur_mid || in_single)
-			    Error("nested class definition");
-			cur_class = $2;
-			push_local();
+			if (cur_mid || in_single)
+			    Error("class definition in method body");
+
+			class_nest++;
+			cref_push();
+			local_push();
 		    }
 		  compexpr
 		  END
 		    {
 		        $$ = NEW_CLASS($2, $5, $3);
-		        pop_local();
-		        cur_class = Qnil;
+		        local_pop();
+			cref_pop();
+			class_nest--;
 		    }
-		| MODULE IDENTIFIER
+		| MODULE CONSTANT
 		    {
-			if (cur_class != Qnil)
-			    Error("nested module definition");
-			cur_class = $2;
-			in_module = 1;
-			push_local();
+			if (cur_mid || in_single)
+			    Error("module definition in method body");
+			class_nest++;
+			cref_push();
+			local_push();
 		    }
 		  compexpr
 		  END
 		    {
 		        $$ = NEW_MODULE($2, $4);
-		        pop_local();
-		        cur_class = Qnil;
-			in_module = 0;
+		        local_pop();
+			cref_pop();
+			class_nest--;
 		    }
 		| DEF fname
 		    {
 			if (cur_mid || in_single)
 			    Error("nested method definition");
 			cur_mid = $2;
-			push_local();
+			local_push();
 		    }
 		  f_arglist
 		  compexpr
 		  END
 		    {
-			$$ = NEW_DEFN($2, NEW_RFUNC($4, $5), cur_class?0:1);
-		        pop_local();
+			$$ = NEW_DEFN($2, $4, $5, class_nest?0:1);
+		        local_pop();
 			cur_mid = Qnil;
 		    }
 		| DEF singleton '.' fname
 		    {
 			value_expr($2);
 			in_single++;
-			push_local();
+			local_push();
 		    }
 		  f_arglist
 		  compexpr
 		  END
 		    {
-			$$ = NEW_DEFS($2, $4, NEW_RFUNC($6, $7));
-		        pop_local();
+			$$ = NEW_DEFS($2, $4, $6, $7);
+		        local_pop();
 			in_single--;
 		    }
 
@@ -878,12 +868,7 @@ case_body	: WHEN args then
 		    }
 
 cases		: opt_else
-		| WHEN args then
-		  compexpr
-		  cases
-		    {
-			$$ = NEW_WHEN($2, $4, $5);
-		    }
+		| case_body
 
 resque		: /* none */
 		    {
@@ -912,12 +897,10 @@ literal		: numeric
 			$$ = INT2FIX($2);
 		    }
 		| REGEXP
-		| GLOB
 
 symbol		: fname
 		| IVAR
 		| GVAR
-		| CONSTANT
 
 numeric		: INTEGER
 		| FLOAT
@@ -926,6 +909,7 @@ variable	: IDENTIFIER
 		| IVAR
 		| GVAR
 		| CONSTANT
+		| NTH_REF
 		| NIL
 		    {
 			$$ = NIL;
@@ -948,7 +932,7 @@ superclass	: term
 		    {
 			lex_state = EXPR_BEG;
 		    }
-		  IDENTIFIER
+		  CONSTANT
 		    {
 			$$ = $3;
 		    }
@@ -1032,7 +1016,6 @@ singleton	: var_ref
 			  case NODE_XSTR:
 			  case NODE_XSTR2:
 			  case NODE_DREGX:
-			  case NODE_DGLOB:
 			  case NODE_LIT:
 			  case NODE_ARRAY:
 			  case NODE_ZARRAY:
@@ -1047,8 +1030,8 @@ assoc_list	: /* none */
 		    {
 			$$ = Qnil;
 		    }
-		| assocs
-		| args
+		| assocs trailer
+		| args trailer
 		    {
 			if ($1->nd_alen%2 != 0) {
 			    Error("odd number list for Dict");
@@ -1070,6 +1053,13 @@ assoc		: arg ASSOC arg
 opt_term	: /* none */
 		| term
 
+opt_nl		: /* none */
+		| nl
+
+trailer		: /* none */
+		| nl
+		| comma
+
 term		: sc
 		| nl
 
@@ -1083,11 +1073,12 @@ rparen		: ')' 		{ yyerrok; }
 rbracket	: ']'		{ yyerrok; }
 rbrace		: '}'		{ yyerrok; }
 comma		: ',' 		{ yyerrok; }
-%%
 
+%%
 #include <ctype.h>
 #include <sys/types.h>
 #include "regex.h"
+#include "util.h"
 
 #define is_identchar(c) ((c)!=-1&&(isalnum(c) || (c) == '_' || ismbchar(c)))
 
@@ -1100,11 +1091,10 @@ VALUE newfloat();
 VALUE newinteger();
 char *strdup();
 
-#define EXPAND_B 1
-#define LEAVE_BS 2
-
 static NODE *var_extend();
 static void read_escape();
+
+#define LEAVE_BS 1
 
 static char *lex_p;
 static int lex_len;
@@ -1124,6 +1114,22 @@ lex_setsrc(src, ptr, len)
 
 #define nextc() ((--lex_len>=0)?(*lex_p++):-1)
 #define pushback() (lex_len++, lex_p--)
+
+#define SCAN_HEX(i) 			\
+do {					\
+    int numlen;				\
+    i=scan_hex(lex_p, 2, &numlen);	\
+    lex_p += numlen;			\
+    lex_len -= numlen;			\
+} while (0)
+
+#define SCAN_OCT(i) 			\
+do {					\
+    int numlen;				\
+    i=scan_oct(lex_p, 3, &numlen);	\
+    lex_p += numlen;			\
+    lex_len -= numlen;			\
+} while (0)
 
 #define tokfix() (tokenbuf[tokidx]='\0')
 #define tok() tokenbuf
@@ -1159,6 +1165,7 @@ static int
 parse_regx()
 {
     register int c;
+    int casefold = 0;
     int in_brack = 0;
     int re_start = sourceline;
     NODE *list = Qnil;
@@ -1179,18 +1186,37 @@ parse_regx()
 		continue;
 
 	  case '\\':
-	    if ((c = nextc()) == -1) {
+	    switch (c = nextc()) {
+	      case -1:
 		sourceline = re_start;
 		Error("unterminated regexp meets end of file");
 		return 0;
-	    }
-	    else if (c == '\n') {
+
+	      case '\n':
 		sourceline++;
-	    }
-	    else if (in_brack && c == 'b') {
-		tokadd('\b');
-	    }
-	    else {
+		break;
+
+	      case '\\':
+		tokadd('\\');
+		tokadd('\\');
+		break;
+
+	      case '1': case '2': case '3':
+	      case '4': case '5': case '6':
+	      case '7': case '8': case '9':
+	      case '0': case 'x':
+		tokadd('\\');
+		tokadd(c);
+		break;
+
+	      case 'b':
+		if (!in_brack) {
+		    tokadd('\\');
+		    tokadd('b');
+		    break;
+		}
+		/* fall through */
+	      default:
 		pushback();
 		read_escape(LEAVE_BS);
 	    }
@@ -1200,6 +1226,13 @@ parse_regx()
 	    if (in_brack)
 		break;
 
+	    if ('i' == nextc()) {
+		casefold = 1;
+	    }
+	    else {
+		pushback();
+	    }
+
 	    tokfix();
 	    lex_state = EXPR_END;
 	    if (list) {
@@ -1208,11 +1241,12 @@ parse_regx()
 		    list_append(list, NEW_STR(ss));
 		}
 		nd_set_type(list, NODE_DREGX);
+		if (casefold) list->nd_cflag = 1;
 		yylval.node = list;
 		return DREGEXP;
 	    }
 	    else {
-		yylval.val = regexp_new(tok(), toklen());
+		yylval.val = regexp_new(tok(), toklen(), casefold);
 		return REGEXP;
 	    }
 	  case -1:
@@ -1269,11 +1303,11 @@ parse_string(term)
 		tokadd(c);
 	    }
 	    else {
-		int flags = EXPAND_B;
-		if (term != '"') flags |= LEAVE_BS;
-		pushback();
-		read_escape(flags);
-	    }
+                int flags = 0;
+                if (term != '"') flags = LEAVE_BS;
+                pushback();
+                read_escape(flags);
+  	    }
 	    continue;
 	}
 	tokadd(c);
@@ -1312,6 +1346,7 @@ static struct kwtable {
     "__LINE__", _LINE_,         EXPR_END,
     "alias",	ALIAS,		EXPR_FNAME,
     "and",	AND,		EXPR_BEG,
+    "begin",	BEGIN,		EXPR_BEG,
     "break",	BREAK,		EXPR_END,
     "case",	CASE,		EXPR_BEG,
     "class",	CLASS,		EXPR_BEG,
@@ -1325,11 +1360,9 @@ static struct kwtable {
     "for", 	FOR,		EXPR_BEG,
     "if",	IF,		EXPR_BEG,
     "in",	IN,		EXPR_BEG,
-    "include",	INCLUDE,	EXPR_BEG,
     "module",	MODULE,		EXPR_BEG,
     "nil",	NIL,		EXPR_END,
     "or",	OR,		EXPR_BEG,
-    "protect",	PROTECT,	EXPR_BEG,
     "redo",	REDO,		EXPR_END,
     "resque",	RESQUE,		EXPR_BEG,
     "retry",	RETRY,		EXPR_END,
@@ -1348,7 +1381,6 @@ yylex()
 {
     register int c;
     struct kwtable *low = kwtable, *mid, *high = LAST(kwtable);
-    int last;
 
 retry:
     switch (c = nextc()) {
@@ -1367,6 +1399,10 @@ retry:
 	while ((c = nextc()) != '\n') {
 	    if (c == -1)
 		return 0;
+	    if (c == '\\') {	/* skip a char */
+		c = nextc();
+		if (c == '\n') sourceline++;
+	    }
 	}
 	/* fall through */
       case '\n':
@@ -1419,14 +1455,6 @@ retry:
 	return '=';
 
       case '<':
-	if (lex_state == EXPR_BEG) {
-	    if (parse_string('>') == STRING) {
-		yylval.val = glob_new(yylval.val);
-		return GLOB;
-	    }
-	    nd_set_type(yylval.node, NODE_DGLOB);
-	    return DGLOB;
-	}
 	lex_state = EXPR_BEG;
 	if ((c = nextc()) == '=') {
 	    if ((c = nextc()) == '>') {
@@ -1514,7 +1542,7 @@ retry:
       case '?':
 	if ((c = nextc()) == '\\') {
 	    newtok();
-	    read_escape(EXPAND_B);
+	    read_escape(0);
 	    c = tok()[0];
 	}
 	c &= 0xff;
@@ -1547,24 +1575,24 @@ retry:
 	return '|';
 
       case '+':
-	if (lex_state == EXPR_BEG || lex_state == EXPR_MID) {
-	    c = nextc();
-	    pushback();
-	    if (isdigit(c)) {
-		goto start_num;
-	    }
-	    lex_state = EXPR_BEG;
-	    return UPLUS;
-	}
-	else if (lex_state == EXPR_FNAME) {
+	if (lex_state == EXPR_FNAME) {
 	    if ((c = nextc()) == '@') {
 		return UPLUS;
 	    }
 	    pushback();
 	    return '+';
 	}
+	c = nextc();
+	if (lex_state != EXPR_END) {
+	    pushback();
+	    if (isdigit(c)) {
+		goto start_num;
+	    }
+	    lex_state = EXPR_BEG;
+	    return UMINUS;
+	}
 	lex_state = EXPR_BEG;
-	if ((c = nextc()) == '=') {
+	if (c == '=') {
 	    yylval.id = '+';
 	    return OP_ASGN;
 	}
@@ -1572,8 +1600,15 @@ retry:
 	return '+';
 
       case '-':
-	if (lex_state == EXPR_BEG || lex_state == EXPR_MID) {
-	    c = nextc();
+	if (lex_state == EXPR_FNAME) {
+	    if ((c = nextc()) == '@') {
+		return UMINUS;
+	    }
+	    pushback();
+	    return '-';
+	}
+	c = nextc();
+	if (lex_state != EXPR_END) {
 	    pushback();
 	    if (isdigit(c)) {
 		c = '-';
@@ -1582,15 +1617,8 @@ retry:
 	    lex_state = EXPR_BEG;
 	    return UMINUS;
 	}
-	else if (lex_state == EXPR_FNAME) {
-	    if ((c = nextc()) == '@') {
-		return UMINUS;
-	    }
-	    pushback();
-	    return '-';
-	}
 	lex_state = EXPR_BEG;
-	if ((c = nextc()) == '=') {
+	if (c == '=') {
 	    yylval.id = '-';
 	    return OP_ASGN;
 	}
@@ -1802,26 +1830,17 @@ retry:
 	return '\\';
 
       case '%':
-	if (lex_state == EXPR_BEG || lex_state == EXPR_MID) {
-	    /* class constant */
-	    newtok();
-	    tokadd('%');
-	    c = nextc();
-	    break;
+	lex_state = EXPR_BEG;
+	if (nextc() == '=') {
+	    yylval.id = '%';
+	    return OP_ASGN;
 	}
-	else {
-	    lex_state = EXPR_BEG;
-	    if (nextc() == '=') {
-		yylval.id = '%';
-		return OP_ASGN;
-	    }
-	    pushback();
-	    return c;
-	}
+	pushback();
+	return c;
 
       case '$':
+	lex_state = EXPR_END;
 	newtok();
-	tokadd(c);
 	c = nextc();
 	switch (c) {
 	  case '*':		/* $*: argv */
@@ -1844,15 +1863,42 @@ retry:
 	  case '<':		/* $<: reading filename */
 	  case '>':		/* $>: default output handle */
 	  case '"':		/* $": already loaded files */
+	    tokadd('$');
 	    tokadd(c);
-	    tokadd('\0');
-	    goto id_fetch;
+	    tokfix();
+	    yylval.id = rb_intern(tok());
+	    return GVAR;
 
-	  default:
-	    if (is_identchar(c))
-		break;
+	  case '1':
+	  case '2':
+	  case '3':
+	  case '4':
+	  case '5':
+	  case '6':
+	  case '7':
+	  case '8':
+	  case '9':
+	    while (isdigit(c)) {
+		tokadd(c);
+		c = nextc();
+	    }
 	    pushback();
-	    return tok()[0];
+	    tokfix();
+	    {
+		ID id = atoi(tok());
+		id <<= ID_SCOPE_SHIFT;
+		id |= ID_NTHREF;
+		yylval.id = id;
+		return NTH_REF;
+	    }
+
+	  case '0':
+	  default:
+	    if (!is_identchar(c)) {
+		pushback();
+		return '$';
+	    }
+	    tokadd('$');
 	}
 	break;
 
@@ -1887,51 +1933,55 @@ retry:
     pushback();
     tokfix();
 
-    /* See if it is a reserved word.  */
-    while (low <= high) {
-	mid = low + (high - low)/2;
-	if (( c = strcmp(mid->name, tok())) == 0) {
-	    enum lex_state state = lex_state;
-	    lex_state = mid->state;
-	    if (state != EXPR_BEG) {
-		if (mid->id == IF) return IF_MOD;
-		if (mid->id == WHILE) return WHILE_MOD;
-	    }
-	    return mid->id;
-	}
-	else if (c < 0) {
-	    low = mid + 1;
-	}
-	else {
-	    high = mid - 1;
-	}
-    }
-
-  id_fetch:
     {
-	enum lex_state state = lex_state;
+	int result;
 
-	lex_state = EXPR_END;
-	yylval.id = rb_intern(tok());
 	switch (tok()[0]) {
-	  case '%':
-	    return CONSTANT;
 	  case '$':
-	    return GVAR;
+	    result = GVAR;
+	    break;
 	  case '@':
-	    return IVAR;
+	    result = IVAR;
+	    break;
 	  default:
-	    if (state == EXPR_FNAME) {
+	    /* See if it is a reserved word.  */
+	    while (low <= high) {
+		mid = low + (high - low)/2;
+		if (( c = strcmp(mid->name, tok())) == 0) {
+		    enum lex_state state = lex_state;
+		    lex_state = mid->state;
+		    if (state != EXPR_BEG) {
+			if (mid->id == IF) return IF_MOD;
+			if (mid->id == WHILE) return WHILE_MOD;
+		    }
+		    return mid->id;
+		}
+		else if (c < 0) {
+		    low = mid + 1;
+		}
+		else {
+		    high = mid - 1;
+		}
+	    }
+
+	    if (lex_state == EXPR_FNAME) {
 		if ((c = nextc()) == '=') {
-		    yylval.id &= ~ID_SCOPE_MASK;
-		    yylval.id |= ID_ATTRSET;
+		    tokadd(c);
 		}
 		else {
 		    pushback();
 		}
 	    }
-	    return IDENTIFIER;
+	    if (isupper(tok()[0])) {
+		result = CONSTANT;
+	    }
+	    else {
+		result = IDENTIFIER;
+	    }
 	}
+	lex_state = EXPR_END;
+	yylval.id = rb_intern(tok());
+	return result;
     }
 }
 
@@ -1950,7 +2000,7 @@ var_extend(list, term)
 	tokadd('#');
 	pushback();
 	return list;
-      case '@': case '%':
+      case '@':
 	t = nextc();
 	pushback();
 	if (!is_identchar(t)) {
@@ -1999,7 +2049,7 @@ var_extend(list, term)
 		goto fetch_id;
 	    }
 	    /* through */
-	  case '@': case '%':
+	  case '@':
 	    tokadd(c);
 	    c = nextc();
 	    break;
@@ -2066,87 +2116,36 @@ read_escape(flag)
 	tokadd(033);
 	break;
 
-      case 'M':
-	if ((c = nextc()) != '-') {
-	    Error("Invalid escape character syntax");
-	    tokadd('\0');
-	    return;
-	}
-	if ((c = nextc()) == '\\') {
-	    read_escape(flag);
-	    tokenbuf[tokidx-1] |= 0200; /* kludge */
-	}
-	else {
-	    tokadd((c & 0xff) | 0200);
-	}
-	break;
-
-      case 'C':
-	if ((c = nextc()) != '-') {
-	    Error("Invalid escape character syntax");
-	    tokadd('\0');
-	    return;
-	}
-    case '^':
-	if ((c = nextc())== '\\') {
-	    read_escape (flag);
-	    tokenbuf[tokidx-1] &= 0237; /* kludge */
-	}
-	else if (c == '?')
+      case 'c':
+	if (c == '?')
 	    tokadd(0177);
-	else
-	    tokadd(c & 0237);
+	else {
+	    if (islower(c))
+		c = toupper(c);
+	    tokadd(c ^ 64);
+	}
 	break;
 
       case '0': case '1': case '2': case '3':
       case '4': case '5': case '6': case '7':
 	{	/* octal constant */
-	    register int i = c - '0';
-	    register int count = 0;
-
-	    while (++count < 3) {
-		if ((c = nextc()) >= '0' && c <= '7') {
-		    i *= 8;
-		    i += c - '0';
-		}
-		else {
-		    pushback();
-		    break;
-		}
-	    }
-	    tokadd(i&0xff);
+	    pushback();
+	    SCAN_OCT(c);
+	    tokadd(c);
 	}
 	break;
 
       case 'x':	/* hex constant */
 	{
-	    register int i = 0;
-	    register int count = 0;
-
-	    while (++count < 3) {
-		if ((c = nextc()) >= '0' && c <= '9') {
-		    i *= 16;
-		    i += c - '0';
-		}
-		else if ((int)strchr("abcdefABCDEF", (c = nextc()))) {
-		    i *= 16;
-		    i += toupper(c) - 'A' + 10;
-		}
-		else {
-		    pushback();
-		    break;
-		}
-	    }
-	    tokadd(i&0xff);
+	    SCAN_HEX(c);
+	    tokadd(c);
 	}
 	break;
 
       case 'b':	/* backspace */
-	if (flag & EXPAND_B) {
-	    tokadd('\b');
-	    return;
-	}
-	/* go turough */
+	tokadd('\b');
+	return;
+
       default:
 	if (flag & LEAVE_BS) {
 	    tokadd('\\');
@@ -2371,7 +2370,7 @@ gettable(id)
 	if (local_id(id))
 	    return NEW_LVAR(id);
 	else
-	    return NEW_MVAR(id);
+	    return NEW_LVAR2(id);
     }
     else if (is_global_id(id)) {
 	return NEW_GVAR(id);
@@ -2382,6 +2381,9 @@ gettable(id)
     else if (is_const_id(id)) {
 	return NEW_CVAR(id);
     }
+    else if (is_nthref_id(id)) {
+	return NEW_NTH_REF(id>>ID_SCOPE_SHIFT);
+    }
 }
 
 static NODE*
@@ -2389,14 +2391,12 @@ asignable(id, val)
     ID id;
     NODE *val;
 {
-    NODE *lhs;
+    NODE *lhs = Qnil;
 
     if (id == SELF) {
-	lhs = Qnil;
 	Error("Can't change the value of self");
     }
     else if (id == NIL) {
-	lhs = Qnil;
 	Error("Can't asign to nil");
     }
     else if (id == _LINE_ || id == _FILE_) {
@@ -2415,6 +2415,9 @@ asignable(id, val)
 	if (cur_mid || in_single)
 	    Error("class constant asigned in method body");
 	lhs = NEW_CASGN(id, val);
+    }
+    else if (is_nthref_id(id)) {
+	Error("Can't set variable $%d", id>>ID_SCOPE_SHIFT);
     }
     else {
 	Bug("bad id for variable");
@@ -2438,8 +2441,8 @@ attrset(recv, id, val)
 {
     value_expr(recv);
     value_expr(val);
-
-    id &= ~ID_SCOPE_MASK;
+ 
+   id &= ~ID_SCOPE_MASK;
     id |= ID_ATTRSET;
 
     return NEW_CALL(recv, id, NEW_LIST(val));
@@ -2460,7 +2463,6 @@ value_expr(node)
       case NODE_FAIL:
       case NODE_WHILE:
       case NODE_WHILE2:
-      case NODE_INC:
       case NODE_CLASS:
       case NODE_MODULE:
       case NODE_DEFN:
@@ -2511,9 +2513,7 @@ cond(node)
       case NODE_GASGN:
       case NODE_IASGN:
       case NODE_CASGN:
-	if (verbose) {
-	    Warning("asignment in condition");
-	}
+	Warning("asignment in condition");
 	break;
     }
 
@@ -2547,7 +2547,7 @@ static struct local_vars {
 } *lvtbl;
 
 static void
-push_local()
+local_push()
 {
     struct local_vars *local;
 
@@ -2559,7 +2559,7 @@ push_local()
 }
 
 static void
-pop_local()
+local_pop()
 {
     struct local_vars *local = lvtbl;
 
@@ -2612,10 +2612,10 @@ local_id(id)
 }
 
 static void
-init_top_local()
+top_local_init()
 {
     if (lvtbl == Qnil) {
-	push_local();
+	local_push();
     }
     else if (the_scope->local_tbl) {
 	lvtbl->cnt = the_scope->local_tbl[0];
@@ -2630,10 +2630,11 @@ init_top_local()
     else {
 	lvtbl->tbl = Qnil;
     }
+    NEW_CREF0();		/* initialize constant c-ref */
 }
 
 static void
-setup_top_local()
+top_local_setup()
 {
     int len = lvtbl->cnt;
     int i;
@@ -2668,14 +2669,24 @@ setup_top_local()
 	    free(lvtbl->tbl);
 	}
     }
+    cref_list = Qnil;
+}
+
+static void
+cref_pop()
+{
+    NODE *cref = cref_list;
+
+    cref_list = cref_list->nd_next;
+    cref->nd_next = Qnil;
 }
 
 void
 yyappend_print()
 {
     eval_tree =
-	block_append(eval_tree, NEW_CALL(Qnil, rb_intern("print"),
-					 NEW_ARRAY(NEW_GVAR(rb_intern("$_")))));
+	block_append(eval_tree, NEW_FCALL(rb_intern("print"),
+					  NEW_ARRAY(NEW_GVAR(rb_intern("$_")))));
 }
 
 void
@@ -2694,7 +2705,7 @@ yywhole_loop(chop, split)
 	    block_append(NEW_CALL(NEW_GVAR(rb_intern("$_")),
 				  rb_intern("chop"), Qnil), eval_tree);
     }
-    eval_tree = NEW_WHILE(NEW_CALL(0,rb_intern("gets"),0),eval_tree);
+    eval_tree = NEW_WHILE(NEW_FCALL(rb_intern("gets"),0),eval_tree);
 }
 
 static struct op_tbl rb_op_tbl[] = {
@@ -2750,6 +2761,7 @@ Init_sym()
     int strcmp();
 
     sym_tbl = st_init_table(strcmp, st_strhash);
+    rb_global_variable(&cref_list);
 }
 
 ID
@@ -2764,7 +2776,7 @@ rb_intern(name)
 	return id;
 
     id = ++last_id;
-    id <<= 3;
+    id <<= ID_SCOPE_SHIFT;
     switch (name[0]) {
       case '$':
 	id |= ID_GLOBAL;
@@ -2772,11 +2784,6 @@ rb_intern(name)
       case '@':
 	id |= ID_INSTANCE;
 	break;
-      case '%':
-	if (name[1] != '\0') {
-	    id |= ID_CONST;
-	    break;
-	}
 	/* fall through */
       default:
 	if (name[0] != '_' && !isalpha(name[0]) && !ismbchar(name[0])) {
@@ -2793,6 +2800,7 @@ rb_intern(name)
 	    if (id == Qnil) Bug("Unknown operator `%s'", name);
 	    break;
 	}
+	
 	last = strlen(name)-1;
 	if (name[last] == '=') {
 	    /* attribute asignment */
@@ -2804,6 +2812,9 @@ rb_intern(name)
 	    id &= ~ID_SCOPE_MASK;
 	    id |= ID_ATTRSET;
 	}
+	else if (isupper(name[0])) {
+	    id |= ID_CONST;
+        }
 	else {
 	    id |= ID_LOCAL;
 	}
@@ -2860,40 +2871,6 @@ rb_id2name(id)
 	}
     }
     return find_ok;
-}
-
-char *
-rb_class2name(class)
-    struct RClass *class;
-{
-    extern st_table *rb_class_tbl;
-
-    find_ok = Qnil;
-
-    switch (TYPE(class)) {
-      case T_ICLASS:
-        class = (struct RClass*)RBASIC(class)->class;
-	break;
-      case T_CLASS:
-      case T_MODULE:
-	break;
-      default:
-	Fail("0x%x is not a class/module", class);
-    }
-
-    while (FL_TEST(class, FL_SINGLE)) {
-	class = (struct RClass*)class->super;
-    }
-
-    while (TYPE(class) == T_ICLASS) {
-        class = (struct RClass*)class->super;
-    }
-
-    st_foreach(rb_class_tbl, id_find, class);
-    if (find_ok) {
-	return rb_id2name((ID)find_ok);
-    }
-    Bug("class 0x%x not named", class);
 }
 
 static int

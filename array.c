@@ -6,7 +6,7 @@
   $Date: 1995/01/10 10:42:18 $
   created at: Fri Aug  6 09:46:12 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
@@ -262,9 +262,7 @@ range_beg_end(range, begp, lenp, len)
     if (beg > end) {
 	int tmp;
 
-	if (verbose) {
-	    Warning("start %d is bigger than end %d", beg, end);
-	}
+	Warning("start %d is bigger than end %d", beg, end);
 	tmp = beg; beg = end; end = tmp;
     }
     *begp = beg; *lenp = end - beg + 1;

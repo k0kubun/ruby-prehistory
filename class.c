@@ -6,7 +6,7 @@
   $Date: 1995/01/12 08:54:44 $
   created at: Tue Aug 10 15:05:44 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
@@ -16,6 +16,7 @@
 #include "st.h"
 
 struct st_table *new_idhash();
+extern st_table *rb_class_tbl;
 
 extern VALUE C_Class;
 extern VALUE C_Module;
@@ -81,7 +82,6 @@ rb_define_class_id(id, super)
     struct RClass *cls = (struct RClass*)class_new(super);
 
     rb_name_class(cls, id);
-
     /* make metaclass */
     RBASIC(cls)->class = single_class_new(super?super->class:C_Class);
 
@@ -93,7 +93,29 @@ rb_define_class(name, super)
     char *name;
     VALUE super;
 {
-    return rb_define_class_id(rb_intern(name), super);
+    VALUE class;
+    ID id;
+
+    id = rb_intern(name);
+    class = rb_define_class_id(id, super);
+    st_add_direct(rb_class_tbl, id, class);
+
+    return class;
+}
+
+rb_define_class_under(under, name, super)
+    VALUE under;
+    char *name;
+    VALUE super;
+{
+    VALUE class;
+    ID id;
+
+    id = rb_intern(name);
+    class = rb_define_class_id(id, super);
+    rb_const_set(under, id, class);
+
+    return class;
 }
 
 VALUE
@@ -112,9 +134,11 @@ VALUE
 rb_define_module_id(id)
     ID id;
 {
+    extern st_table *rb_class_tbl;
     struct RClass *mdl = (struct RClass*)module_new();
 
     rb_name_class(mdl, id);
+
     return (VALUE)mdl;
 }
 
@@ -122,7 +146,28 @@ VALUE
 rb_define_module(name)
     char *name;
 {
-    return rb_define_module_id(rb_intern(name));
+    VALUE module;
+    ID id;
+
+    id = rb_intern(name);
+    module = rb_define_module_id(id);
+    st_add_direct(rb_class_tbl, id, module);
+
+    return module;
+}
+
+rb_define_module_under(under, name)
+    VALUE under;
+    char *name;
+{
+    VALUE module;
+    ID id;
+
+    id = rb_intern(name);
+    module = rb_define_module_id(id);
+    rb_const_set(under, id, module);
+
+    return module;
 }
 
 static struct RClass *
@@ -158,7 +203,7 @@ rb_include_module(class, module)
     Check_Type(module, T_MODULE);
 
     if (BUILTIN_TYPE(class) == T_CLASS) {
-	rb_clear_cache2(class);
+	rb_clear_cache(class);
     }
 
     while (module) {
@@ -179,33 +224,13 @@ rb_include_module(class, module)
 }
 
 void
-rb_add_method(class, mid, node, noex)
-    struct RClass *class;
-    ID mid;
-    NODE *node;
-    int noex;
-{
-    NODE *body;
-
-    if (class == Qnil) class = (struct RClass*)C_Object;
-    if (st_lookup(class->m_tbl, mid, &body)) {
-	if (verbose) {
-	    Warning("redefine %s", rb_id2name(mid));
-	}
-	rb_clear_cache(body);
-    }
-    body = NEW_METHOD(node, noex);
-    st_insert(class->m_tbl, mid, body);
-}
-
-void
 rb_define_method(class, name, func, argc)
     struct RClass *class;
     char *name;
     VALUE (*func)();
     int argc;
 {
-    rb_add_method(class, rb_intern(name), NEW_CFUNC(func, argc), 0);
+    rb_add_method(class, rb_intern(name), NEW_CFUNC(func, argc), NOEX_PUBLIC);
 }
 
 void
@@ -213,7 +238,7 @@ rb_undef_method(class, name)
     struct RClass *class;
     char *name;
 {
-    rb_add_method(class, rb_intern(name), Qnil, 0);
+    rb_add_method(class, rb_intern(name), Qnil, NOEX_PUBLIC);
 }
 
 void
@@ -223,7 +248,7 @@ rb_define_private_method(class, name, func, argc)
     VALUE (*func)();
     int argc;
 {
-    rb_add_method(class, rb_intern(name), NEW_CFUNC(func, argc), 1);
+    rb_add_method(class, rb_intern(name), NEW_CFUNC(func, argc), NOEX_PRIVATE);
 }
 
 VALUE

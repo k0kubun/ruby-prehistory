@@ -6,7 +6,7 @@
   $Date: 1995/01/12 08:54:45 $
   created at: Thu Jun 10 14:22:17 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
@@ -19,7 +19,8 @@
 #include <setjmp.h>
 #include "st.h"
 
-void rb_clear_cache();
+static void rb_clear_cache_body();
+static void rb_clear_cache_entry();
 
 /* #define TEST	/* prints cache miss */
 #ifdef TEST
@@ -39,6 +40,27 @@ struct cache_entry {		/* method hash table. */
 };
 
 static struct cache_entry cache[CACHE_SIZE];
+
+void
+rb_add_method(class, mid, node, noex)
+    struct RClass *class;
+    ID mid;
+    NODE *node;
+    int noex;
+{
+    NODE *body;
+
+    if (class == Qnil) class = (struct RClass*)C_Object;
+    if (st_lookup(class->m_tbl, mid, &body)) {
+	Warning("redefine %s", rb_id2name(mid));
+	rb_clear_cache_body(body);
+    }
+    else {
+	rb_clear_cache_entry(class, mid);
+    }
+    body = NEW_METHOD(node, noex);
+    st_insert(class->m_tbl, mid, body);
+}
 
 static NODE*
 search_method(class, id, origin)
@@ -115,10 +137,11 @@ rb_alias(class, name, def)
     }
 
     if (st_lookup(class->m_tbl, name, &old)) {
-	if (verbose) {
-	    Warning("redefine %s", rb_id2name(name));
-	}
-	rb_clear_cache(old->nd_body);
+	Warning("redefine %s", rb_id2name(name));
+	rb_clear_cache_body(body);
+    }
+    else {
+	rb_clear_cache_entry(class, name);
     }
 
     st_insert(class->m_tbl, name,
@@ -160,8 +183,8 @@ rb_method_boundp(class, id)
     return FALSE;
 }
 
-void
-rb_clear_cache(body)
+static void
+rb_clear_cache_body(body)
     NODE *body;
 {
     struct cache_entry *ent, *end;
@@ -176,8 +199,23 @@ rb_clear_cache(body)
     }
 }
 
+static void
+rb_clear_cache_entry(class, mid)
+    struct RClass *class;
+    ID mid;
+{
+    struct cache_entry *ent;
+
+    /* is it in the method cache? */
+    ent = cache + EXPR1(class, mid);
+    if (ent->mid == mid && ent->class == class) {
+	ent->class = Qnil;
+	ent->mid = Qnil;
+    }
+}
+
 void
-rb_clear_cache2(class)
+rb_clear_cache(class)
     struct RClass *class;
 {
     struct cache_entry *ent, *end;
@@ -287,6 +325,7 @@ static struct tag {
 
 #define EXEC_TAG()    (setjmp(prot_tag->buf))
 #define JUMP_TAG(val) {			\
+    Qself = prot_tag->self;		\
     the_env = prot_tag->env;		\
     iter = prot_tag->iter;		\
     longjmp(prot_tag->buf,(val));	\
@@ -307,7 +346,7 @@ static struct tag {
 
 #define IN_BLOCK   0x08
 
-static struct RClass *the_class;
+struct RClass *the_class;
 struct class_link {
     struct RClass *class;
     struct class_link *prev;
@@ -339,6 +378,8 @@ static VALUE rb_call();
 VALUE rb_apply();
 VALUE rb_xstring();
 void rb_fail();
+
+static void module_setup();
 
 static VALUE masign();
 static void asign();
@@ -398,6 +439,8 @@ ruby_init(argc, argv, envp)
     PUSH_TAG();
     PUSH_ITER(ITER_NOT);
     if ((state = EXEC_TAG()) == 0) {
+	rb_call_inits();
+	the_class = (struct RClass*)C_Object;
 	ruby_init0(argc, argv, envp);
     }
     POP_ITER();
@@ -405,6 +448,10 @@ ruby_init(argc, argv, envp)
     POP_SCOPE();
     the_scope = top_scope;
 
+    if (state == TAG_EXIT) {
+	rb_trap_exit();
+	exit(FIX2UINT(last_val));
+    }
     if (state) {
 	PUSH_TAG();
 	error_print();
@@ -450,7 +497,6 @@ ruby_run()
     PUSH_TAG();
     PUSH_ITER(ITER_NOT);
     if ((state = EXEC_TAG()) == 0) {
-	the_class = (struct RClass*)C_Object;
 	Eval();
     }
     POP_ITER();
@@ -788,7 +834,7 @@ rb_eval(node)
 	}
 	return result;
 
-      case NODE_PROT:
+      case NODE_BEGIN:
 	PUSH_TAG();
 	switch (state = EXEC_TAG()) {
 	  case 0:
@@ -884,11 +930,21 @@ rb_eval(node)
 	    int argc; VALUE *argv; /* used in SETUP_ARGS */
 
 	    PUSH_ITER(ITER_NOT);
-	    recv = node->nd_recv?rb_eval(node->nd_recv):Qself;
+	    recv = rb_eval(node->nd_recv);
 	    SETUP_ARGS;
 	    POP_ITER();
-	    return rb_call(CLASS_OF(recv),recv,node->nd_mid,argc,argv,
-			   node->nd_recv?0:1);
+	    return rb_call(CLASS_OF(recv),recv,node->nd_mid,argc,argv,0);
+	}
+	break;
+
+      case NODE_FCALL:
+	{
+	    int argc; VALUE *argv; /* used in SETUP_ARGS */
+
+	    PUSH_ITER(ITER_NOT);
+	    SETUP_ARGS;
+	    POP_ITER();
+	    return rb_call(CLASS_OF(Qself),Qself,node->nd_mid,argc,argv,1);
 	}
 	break;
 
@@ -1017,11 +1073,7 @@ rb_eval(node)
 	    Bug("unexpected local variable");
 	return the_scope->local_vars[node->nd_cnt];
 
-      case NODE_GVAR:
-	return rb_gvar_get(node->nd_entry);
-      case NODE_IVAR:
-	return rb_ivar_get(node->nd_vid);
-      case NODE_MVAR:
+      case NODE_LVAR2:
 	if (the_scope->flags & SCOPE_MALLOCED) {
 	    ID id = node->nd_vid, *tbl = the_scope->local_tbl;
 	    int i, len = tbl[0];
@@ -1034,12 +1086,19 @@ rb_eval(node)
 		return the_scope->local_vars[i];
 	    }
 	}
-	return rb_mvar_get(node->nd_vid);
+	Warning("local var %s not initialized", rb_id2name(node->nd_vid));
+	return Qnil;
+
+      case NODE_GVAR:
+	return rb_gvar_get(node->nd_entry);
+      case NODE_IVAR:
+	return rb_ivar_get(node->nd_vid);
 
       case NODE_CVAR:
 	{
-	    VALUE val = rb_const_get(node->nd_vid);
+	    VALUE val;
 
+	    val = rb_const_get(node->nd_rval->nd_clss, node->nd_vid);
 	    nd_set_type(node, NODE_CONST);
 	    node->nd_cval = val;
 	    return val;
@@ -1047,6 +1106,9 @@ rb_eval(node)
 
       case NODE_CONST:
 	return node->nd_cval;
+
+      case NODE_NTH_REF:
+	return re_nth_match(node->nd_nth);
 
       case NODE_HASH:
 	{
@@ -1094,7 +1156,6 @@ rb_eval(node)
       case NODE_STR2:
       case NODE_XSTR2:
       case NODE_DREGX:
-      case NODE_DGLOB:
 	{
 	    VALUE str, str2;
 	    NODE *list = node->nd_next;
@@ -1114,13 +1175,12 @@ rb_eval(node)
 		list = list->nd_next;
 	    }
 	    if (nd_type(node) == NODE_DREGX) {
-		return regexp_new(RSTRING(str)->ptr, RSTRING(str)->len);
+		VALUE re = regexp_new(RSTRING(str)->ptr, RSTRING(str)->len,
+				      node->nd_cflag);
+		return re;
 	    }
 	    if (nd_type(node) == NODE_XSTR2) {
 		return rb_xstring(str);
-	    }
-	    if (nd_type(node) == NODE_DGLOB) {
-		return glob_new(str);
 	    }
 	    return str;
 	}
@@ -1163,12 +1223,15 @@ rb_eval(node)
 		Fail("Can't define method \"%s\" for nil",
 		     rb_id2name(node->nd_mid));
 	    }
-	    rb_add_method(rb_single_class(recv),node->nd_mid,node->nd_defn,0);
+	    rb_funcall(recv, rb_intern("single_method_added"),
+		       1, INT2FIX(node->nd_mid));
+	    rb_add_method(rb_single_class(recv),node->nd_mid,node->nd_defn,
+			  NOEX_PUBLIC);
 	}
 	return Qnil;
 
       case NODE_UNDEF:
-	rb_add_method(the_class, node->nd_mid, Qnil, 0);
+	rb_add_method(the_class, node->nd_mid, Qnil, NOEX_PUBLIC);
 	return Qnil;
 
       case NODE_ALIAS:
@@ -1178,78 +1241,113 @@ rb_eval(node)
       case NODE_CLASS:
 	{
 	    VALUE super, class;
+	    struct RClass *tmp;
 
 	    if (node->nd_super) {
-		super = rb_id2class(node->nd_super);
+		super = rb_const_get(the_class, node->nd_super);
 		if (super == Qnil) {
 		    Fail("undefined superclass %s",
 			 rb_id2name(node->nd_super));
 		}
 	    }
 	    else {
-		super = C_Object;
-	    }
-	    if (class = rb_id2class(node->nd_cname)) {
-		if (verbose) {
-		    Warning("redefine class %s", rb_id2name(node->nd_cname));
-		}
+		super = Qnil;
 	    }
 
-	    PUSH_SELF((VALUE)the_class);
-	    PUSH_CLASS();
-	    the_class = (struct RClass*)
-		rb_define_class_id(node->nd_cname, super);
-	    PUSH_TAG();
-	    if ((state = EXEC_TAG()) == 0) {
-		rb_eval(node->nd_body);
+	    if (rb_const_bound(the_class, node->nd_cname)) {
+		class = rb_const_get(the_class, node->nd_cname);
+		if (super) {
+		    if (TYPE(class) != T_CLASS)
+			Fail("%s is not a class", rb_id2name(node->nd_cname));
+		    tmp = RCLASS(class)->super;
+		    while (FL_TEST(tmp, FL_SINGLE)) {
+			tmp = RCLASS(tmp)->super;
+		    }
+		    while (TYPE(tmp) == T_ICLASS) {
+			tmp = RCLASS(tmp)->super;
+		    }
+		    if (tmp != super)
+			Fail("%s's superclass differs",
+			     rb_id2name(node->nd_cname));
+		}
+		Warning("extending class %s", rb_id2name(node->nd_cname));
 	    }
-	    POP_TAG();
-	    POP_CLASS();
-	    POP_SELF();
-	    if (state) JUMP_TAG(state);
+	    else {
+		if (super == Qnil) super = C_Object;
+		class = rb_define_class_id(node->nd_cname, super);
+		rb_const_set(the_class, node->nd_cname, class);
+	    }
+
+	    module_setup(class, node->nd_body);
+	    return class;
 	}
-	return Qnil;
 
       case NODE_MODULE:
 	{
 	    VALUE module;
 
-	    if (module = rb_id2class(node->nd_cname)) {
-		if (verbose) {
-		    Warning("redefine module %s", rb_id2name(node->nd_cname));
-		}
+	    if (rb_const_bound(the_class, node->nd_cname)) {
+		module = rb_const_get(the_class, node->nd_cname);
+		if (TYPE(module) != T_MODULE)
+		    Fail("%s is not a module", rb_id2name(node->nd_cname));
+		Warning("extending module %s", rb_id2name(node->nd_cname));
+	    }
+	    else {
+		module = rb_define_module_id(node->nd_cname);
+		rb_const_set(the_class, node->nd_cname, module);
 	    }
 
-	    PUSH_SELF((VALUE)the_class);
-	    PUSH_CLASS();
-	    the_class = (struct RClass*)rb_define_module_id(node->nd_cname);
-	    PUSH_TAG();
-	    if ((state = EXEC_TAG()) == 0) {
-		rb_eval(node->nd_body);
-	    }
-	    POP_TAG();
-	    POP_CLASS();
-	    POP_SELF();
-	    if (state) JUMP_TAG(state);
+	    module_setup(module, node->nd_body);
+	    return module;
 	}
-	return Qnil;
-
-      case NODE_INC:
-	{
-	    struct RClass *module;
-
-	    module = (struct RClass*)rb_id2class(node->nd_modl);
-	    if (module == Qnil) {
-		Fail("undefined module %s", rb_id2name(node->nd_modl));
-	    }
-	    rb_include_module(the_class, module);
-	}
-	return Qnil;
 
       default:
 	Bug("unknown node type %d", nd_type(node));
     }
     return Qnil;		/* not reached */
+}
+
+static void
+module_setup(module, node)
+    VALUE module;
+    NODE *node;
+{
+    int state;
+
+    /* fill c-ref */
+    node->nd_clss = module;
+    node = node->nd_body;
+
+    PUSH_CLASS();
+    the_class = (struct RClass*)module;
+    PUSH_SELF((VALUE)the_class);
+    PUSH_SCOPE();
+    PUSH_TAG();
+
+    if (node->nd_cnt > 0) {
+	the_scope->local_vars = ALLOCA_N(VALUE, node->nd_cnt);
+	MEMZERO(the_scope->local_vars, VALUE, node->nd_cnt);
+	the_scope->local_tbl = node->nd_tbl;
+    }
+    else {
+	the_scope->local_vars = Qnil;
+	the_scope->local_tbl  = Qnil;
+    }
+
+    if ((state = EXEC_TAG()) == 0) {
+	rb_eval(node->nd_body);
+    }
+
+    POP_TAG();
+    if (!(the_scope->flags & SCOPE_MALLOCED)) {
+	the_scope->local_vars = Qnil;
+	the_scope->local_tbl  = Qnil;
+    }
+    if (state != 0) JUMP_TAG(state);
+    POP_SCOPE();
+    POP_SELF();
+    POP_CLASS();
+    if (state) JUMP_TAG(state);
 }
 
 VALUE
@@ -1635,7 +1733,7 @@ rb_ensure(b_proc, data1, e_proc, data2)
 static int last_noex;
 
 static VALUE
-Funknown(argc, argv, obj)
+Fmissing(argc, argv, obj)
     int argc;
     VALUE *argv;
     VALUE obj;
@@ -1660,7 +1758,7 @@ Funknown(argc, argv, obj)
     /* fake environment */
     PUSH_ENV();
     env = the_env->prev;
-    MEMCPY(the_env, the_env->prev->prev, struct ENVIRON, 1);
+    MEMCPY(the_env, env->prev, struct ENVIRON, 1);
     the_env->prev = env;
 
     Fail(format,
@@ -1687,23 +1785,24 @@ rb_undefined(obj, id, argc, argv, noex)
 
     last_noex = noex;
 
-    return rb_funcall2(obj, rb_intern("unknown"), argc+1, nargv);
+    return rb_funcall2(obj, rb_intern("method_missing"), argc+1, nargv);
 }
 
 static VALUE
-rb_call(class, recv, mid, argc, argv, func)
+rb_call(class, recv, mid, argc, argv, scope)
     struct RClass *class;
     VALUE recv;
     ID    mid;
     int argc;
     VALUE *argv;
-    int func;
+    int scope;
 {
     NODE  *body;
     int    noex;
     VALUE  result;
     struct cache_entry *ent;
     int itr;
+    enum node_type type;
 
     /* is it in the method cache? */
     ent = cache + EXPR1(class, mid);
@@ -1722,8 +1821,13 @@ rb_call(class, recv, mid, argc, argv, func)
 	mid = id;
     }
 
-    if (!func && noex) {
-	return rb_undefined(recv, mid, argc, argv, 1);
+    switch (noex) {
+      case NOEX_PUBLIC:
+	break;
+      case NOEX_PRIVATE:
+	if (scope == 0)		/* receiver specified */
+	    return rb_undefined(recv, mid, argc, argv, 1);
+	break;
     }
 
     switch (iter->iter) {
@@ -1735,6 +1839,13 @@ rb_call(class, recv, mid, argc, argv, func)
 	itr = ITER_NOT;
 	break;
     }
+
+    type = nd_type(body);
+    if (type == NODE_ZSUPER) {
+	/* for re-scoped method */
+	return rb_call(class->super, recv, mid, argc, argv, scope?scope:1);
+    }
+
     PUSH_ITER(itr);
     PUSH_SELF(recv);
     PUSH_ENV();
@@ -1743,7 +1854,7 @@ rb_call(class, recv, mid, argc, argv, func)
     the_env->argc = argc;
     the_env->argv = argv;
 
-    switch (nd_type(body)) {
+    switch (type) {
       case NODE_CFUNC:
 	{
 	    int len = body->nd_argc;
@@ -1760,7 +1871,7 @@ rb_call(class, recv, mid, argc, argv, func)
 		result = (*body->nd_cfnc)(argc, argv, recv);
 		break;
 	      case 0:
-	    result = (*body->nd_cfnc)(recv);
+		result = (*body->nd_cfnc)(recv);
 		break;
 	      case 1:
 		result = (*body->nd_cfnc)(recv, argv[0]);
@@ -1859,8 +1970,6 @@ rb_call(class, recv, mid, argc, argv, func)
 	/* for attr get/set */
       case NODE_ATTRSET:
       case NODE_IVAR:
-	/* for exported method */
-      case NODE_ZSUPER:
 	return rb_eval(body);
 
       default:
@@ -1933,7 +2042,7 @@ rb_call(class, recv, mid, argc, argv, func)
 		Fatal("unexpected redo");
 		break;
 	      case TAG_RETRY:
-		Fatal("retry outside of protect clause");
+		Fatal("retry outside of resque clause");
 		break;
 	      case TAG_RETURN:
 		result = last_val;
@@ -2210,8 +2319,41 @@ addpath(path)
     }
 }
 
-extern VALUE C_Kernel;
+static VALUE
+Fmod_include(argc, argv, module)
+    int argc;
+    VALUE *argv;
+    struct RClass *module;
+{
+    int i;
 
+    for (i=0; i<argc; i++) {
+	rb_include_module(module, argv[i]);
+    }
+    return (VALUE)module;
+}
+
+static VALUE
+Ftop_include(argc, argv)
+{
+    return Fmod_include(argc, argv, C_Object);
+}
+
+static VALUE
+Fobj_extend(argc, argv, obj)
+{
+    return Fmod_include(argc, argv, rb_single_class(obj));
+}
+
+void
+rb_extend_object(obj, module)
+    VALUE obj, module;
+{
+    rb_include_module(rb_single_class(obj), module);
+}
+
+extern VALUE C_Kernel;
+extern VALUE C_Module;
 
 Init_eval()
 {
@@ -2227,7 +2369,11 @@ Init_eval()
     rb_define_private_method(C_Kernel, "eval", Feval, 1);
     rb_define_private_method(C_Kernel, "iterator_p", Fiterator_p, 0);
     rb_define_method(C_Kernel, "apply", Fapply, -1);
-    rb_define_method(C_Kernel, "unknown", Funknown, -1);
+    rb_define_method(C_Kernel, "method_missing", Fmissing, -1);
+
+    rb_define_method(C_Module, "include", Fmod_include, -1);
+    rb_define_method(CLASS_OF(TopSelf), "include", Ftop_include, -1);
+    rb_define_method(C_Object, "extend", Fobj_extend, -1);
 }
 
 Init_load()

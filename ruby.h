@@ -6,7 +6,7 @@
   $Date: 1995/01/12 08:54:52 $
   created at: Thu Jun 10 14:26:32 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 *************************************************/
 
@@ -161,7 +161,7 @@ struct RArray {
 
 struct RRegexp {
     struct RBasic basic;
-    struct Regexp *ptr;
+    struct re_pattern_buffer *ptr;
     UINT len;
     char *str;
 };

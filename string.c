@@ -6,7 +6,7 @@
   $Date: 1995/01/10 10:43:01 $
   created at: Mon Aug  9 17:12:58 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
@@ -209,9 +209,7 @@ str_subseq(str, beg, end)
     if (beg > end) {
 	int tmp;
 
-	if (verbose) {
-	    Warning("start %d is bigger than end %d", beg, end);
-	}
+	Warning("start %d is bigger than end %d", beg, end);
 	tmp = beg; beg = end; end = tmp;
     }
 
@@ -360,10 +358,7 @@ Fstr_cmp(str1, str2)
     return INT2FIX(result);
 }
 
-Regexp * make_regexp();
 VALUE Freg_match();
-
-extern VALUE C_Glob;
 
 static VALUE
 Fstr_match(x, y)
@@ -378,16 +373,13 @@ Fstr_match(x, y)
 
       case T_STRING:
 	reg = re_regcomp(y);
-	start = research(reg, x, 0, ignorecase);
+	start = research(reg, x, 0);
 	if (start == -1) {
 	    return FALSE;
 	}
 	return INT2FIX(start);
 
       default:
-	if (obj_is_kind_of(y, C_Glob)) {
-	    return Fglob_match(y, x);
-	}
 	Fail("type mismatch");
 	break;
     }
@@ -405,7 +397,7 @@ Fstr_match2(str)
 	Fail("$_ is not a string");
 
     reg = re_regcomp(str);
-    start = research(reg, rb_lastline, 0, ignorecase);
+    start = research(reg, rb_lastline, 0);
     if (start == -1) {
 	return Qnil;
     }
@@ -453,7 +445,7 @@ Fstr_index(argc, argv, str)
 
     switch (TYPE(sub)) {
       case T_REGEXP:
-	pos = research(sub, str, pos, ignorecase);
+	pos = research(sub, str, pos);
 	break;
 
       case T_STRING:
@@ -606,9 +598,7 @@ Fstr_aref_internal(str, indx)
 	    if (beg > end) {
 		int tmp;
 
-		if (verbose) {
-		    Warning("start %d is bigger than end %d", beg, end);
-		}
+		Warning("start %d is bigger than end %d", beg, end);
 		tmp = beg; beg = end; end = tmp;
 	    }
 
@@ -688,9 +678,9 @@ str_sub(str, pat, val, once)
     int beg, end, offset, n;
 
     for (offset=0, n=0;
-	 (beg=research(pat, str, offset, ignorecase)) >= 0;
-	 offset=RREGEXP(pat)->ptr->regs.start[0]+STRLEN(val)) {
-	end = RREGEXP(pat)->ptr->regs.end[0]-1;
+	 (beg=research(pat, str, offset)) >= 0;
+	 offset=BEG(0)+STRLEN(val)) {
+	end = END(0)-1;
 	sub = re_regsub(val);
 	str_replace2(str, beg, end, sub);
 	n++;
@@ -743,9 +733,7 @@ Fstr_aset_internal(str, indx, val)
 	    if (beg > end) {
 		int tmp;
 
-		if (verbose) {
-		    Warning("start %d is bigger than end %d", beg, end);
-		}
+		Warning("start %d is bigger than end %d", beg, end);
 		tmp = beg; beg = end; end = tmp;
 	    }
 
@@ -1040,14 +1028,14 @@ static VALUE
 Fstr_toupper(str)
     struct RString *str;
 {
-    return Fstr_upcase(str_new(str_new(str->ptr, str->len)));
+    return Fstr_upcase(str_new(str->ptr, str->len));
 }
 
 static VALUE
 Fstr_tolower(str)
     struct RString *str;
 {
-    return Fstr_downcase(str_new(str_new(str->ptr, str->len)));
+    return Fstr_downcase(str_new(str->ptr, str->len));
 }
 
 struct tr {
@@ -1346,11 +1334,8 @@ Fstr_split(argc, argv, str)
 	int last_null = 0;
 	int idx;
 
-#define LMATCH spat->ptr->regs.start
-#define RMATCH spat->ptr->regs.end
-
-	while ((end = research(spat, str, start, ignorecase)) >= 0) {
-	    if (start == end && LMATCH[0] == RMATCH[0]) {
+	while ((end = research(spat, str, start)) >= 0) {
+	    if (start == end && BEG(0) == END(0)) {
 		if (last_null == 1) {
 		    if (ismbchar(str->ptr[beg]))
 			ary_push(result, str_substr(str, beg, 2));
@@ -1367,17 +1352,17 @@ Fstr_split(argc, argv, str)
 	    }
 	    else {
 		ary_push(result, str_substr(str, beg, end-beg));
-		beg = start = RMATCH[0];
+		beg = start = END(0);
 		if (limit && lim <= ++i) break;
 	    }
 	    last_null = 0;
 
 	    for (idx=1; idx < 10; idx++) {
-		if (LMATCH[idx] == -1) break;
-		if (LMATCH[idx] == RMATCH[idx])
+		if (BEG(idx) == -1) break;
+		if (BEG(idx) == END(idx))
 		    tmp = str_new(0, 0);
 		else
-		    tmp = str_subseq(str, LMATCH[idx], RMATCH[idx]-1);
+		    tmp = str_subseq(str, BEG(idx), END(idx)-1);
 		ary_push(result, tmp);
 		if (limit && lim <= ++i) break;
 	    }
@@ -1386,9 +1371,6 @@ Fstr_split(argc, argv, str)
     }
     if (str->len > beg) {
 	ary_push(result, str_subseq(str, beg, -1));
-    }
-    else if (str->len == beg) {
-	ary_push(result, str_new(0, 0));
     }
 
     return result;

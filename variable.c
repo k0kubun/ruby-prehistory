@@ -38,11 +38,40 @@ rb_name_class(class, id)
 {
     VALUE body;
 
-    if (st_lookup(class_tbl, id, &body)) {
-	Bug("%s %s already exists",
-	    TYPE(body)==T_CLASS?"class":"module", rb_id2name(id));
+    rb_ivar_set_1(class, rb_intern("__classname__"), INT2FIX(id));
+}
+
+char *
+rb_class2name(class)
+    struct RClass *class;
+{
+    int name;
+
+    switch (TYPE(class)) {
+      case T_ICLASS:
+        class = (struct RClass*)RBASIC(class)->class;
+	break;
+      case T_CLASS:
+      case T_MODULE:
+	break;
+      default:
+	Fail("0x%x is not a class/module", class);
     }
-    st_add_direct(class_tbl, id, class);
+
+    while (FL_TEST(class, FL_SINGLE)) {
+	class = (struct RClass*)class->super;
+    }
+
+    while (TYPE(class) == T_ICLASS) {
+        class = (struct RClass*)class->super;
+    }
+
+    name = rb_ivar_get_1(class, rb_intern("__classname__"));
+    if (name) {
+	name = FIX2INT(name);
+	return rb_id2name((ID)name);
+    }
+    Bug("class 0x%x not named", class);
 }
 
 struct global_entry {
@@ -174,17 +203,6 @@ rb_readonly_hook(val, id)
 }
 
 VALUE
-rb_id2class(id)
-    ID id;
-{
-    VALUE class;
-
-    if (st_lookup(class_tbl, id, &class))
-	return class;
-    return Qnil;
-}
-
-VALUE
 rb_gvar_get(entry)
     struct global_entry *entry;
 {
@@ -203,8 +221,7 @@ rb_gvar_get(entry)
       default:
 	break;
     }
-    if (verbose)
-	Warning("global var %s not initialized", rb_id2name(entry->id));
+    Warning("global var %s not initialized", rb_id2name(entry->id));
     return Qnil;
 }
 
@@ -248,18 +265,6 @@ rb_gvar_set2(name, val)
 }
 
 VALUE
-rb_mvar_get(id)
-    ID id;
-{
-    VALUE val;
-
-    if (st_lookup(class_tbl, id, &val)) return val;
-    if (verbose)
-	Warning("local var %s not initialized", rb_id2name(id));
-    return Qnil;
-}
-
-VALUE
 rb_ivar_get_1(obj, id)
     struct RObject *obj;
     ID id;
@@ -278,9 +283,7 @@ rb_ivar_get_1(obj, id)
 	     rb_class2name(CLASS_OF(obj)));
 	break;
     }
-    if (verbose) {
-	Warning("instance var %s not initialized", rb_id2name(id));
-    }
+    Warning("instance var %s not initialized", rb_id2name(id));
     return Qnil;
 }
 
@@ -321,18 +324,29 @@ rb_ivar_set(id, val)
 }
 
 VALUE
-rb_const_get(id)
+rb_const_get(class, id)
+    struct RClass *class;
     ID id;
 {
-    struct RClass *class = (struct RClass*)CLASS_OF(Qself);
     VALUE value;
 
     while (class) {
 	if (class->iv_tbl && st_lookup(class->iv_tbl, id, &value)) {
 	    return value;
 	}
-	class = class->super;
+	if (BUILTIN_TYPE(class) == T_MODULE) {
+	    class = RCLASS(C_Object);
+	}
+	else {
+	    class = class->super;
+	}
     }
+
+    /* pre-defined class */
+    if (st_lookup(class_tbl, id, &value)) return value;
+
+    /* here comes autoload code in the future. */
+
     Fail("Uninitialized constant %s", rb_id2name(id));
     /* not reached */
 }
@@ -348,6 +362,8 @@ rb_const_bound(class, id)
 	}
 	class = class->super;
     }
+    if (st_lookup(class_tbl, id, Qnil))
+	return TRUE;
     return FALSE;
 }
 

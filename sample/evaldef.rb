@@ -3,7 +3,7 @@
 #	bar
 #	(eval):26: method `baz' not available for "#<foo: 0xbfc5c>"(foo)
 
-class foo
+class Foo
   def foo
     eval("
 def baz
@@ -12,14 +12,14 @@ end")
   end
 end
 
-class bar:foo
+class Bar : Foo
   def bar
     baz()
   end
 end
 
-f = foo.new
-b = bar.new
+f = Foo.new
+b = Bar.new
 
 b.foo
 b.bar

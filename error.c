@@ -6,7 +6,7 @@
   $Date: 1995/01/10 10:42:31 $
   created at: Mon Aug  9 16:11:34 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
@@ -25,8 +25,13 @@ err_sprintf(buf, fmt, args)
     char *buf, *fmt;
     va_list args;
 {
-    sprintf(buf, "%s:%d: ", sourcefile, sourceline);
-    vsprintf((char*)buf+strlen(buf), fmt, args);
+    if (!sourcefile) {
+	vsprintf(buf, fmt, args);
+    }
+    else {
+	sprintf(buf, "%s:%d: ", sourcefile, sourceline);
+	vsprintf((char*)buf+strlen(buf), fmt, args);
+    }
     if (buf[strlen(buf)-1] != '\n')
 	strcat(buf, "\n");
 }
@@ -84,6 +89,8 @@ Warning(fmt, va_alist)
 {
     char buf[BUFSIZ];
     va_list args;
+
+    if (!verbose) return;
 
     sprintf(buf, "warning: %s", fmt);
 

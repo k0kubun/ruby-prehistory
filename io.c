@@ -6,7 +6,7 @@
   $Date: 1995/01/10 10:42:39 $
   created at: Fri Oct 15 18:08:59 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
@@ -334,9 +334,8 @@ Fio_gets(obj)
     if (str) {
 	fptr->lineno++;
 	lineno = INT2FIX(fptr->lineno);
-	return rb_lastline = (VALUE)str;
     }
-    return Qnil;
+    return rb_lastline = (VALUE)str;
 }
 
 static VALUE
@@ -936,22 +935,18 @@ rb_xstring(str)
 
 struct timeval *time_timeval();
 
-#ifdef STDSTDIO
-# define READ_PENDING(fp) ((fp)->_cnt != 0)
-#else
-# ifdef __SLBF
-#  define READ_PENDING(fp) ((fp)->_r > 0)
-# else
-#  ifdef __linux__
+#ifdef _STDIO_USES_IOSTREAM  /* GNU libc */
 #   ifdef _other_gbase
-#    define READ_PENDING(fp) ((fp)->_IO_read_ptr < (fp)->_IO_read_end)
+#	define READ_DATA_PENDING(fp) ((fp)->_IO_read_ptr < (fp)->_IO_read_end)
 #   else
-#    define READ_PENDING(fp) ((fp)->_gptr < (fp)->_egptr)
+#	define READ_DATA_PENDING(fp) ((fp)->_gptr < (fp)->_egptr)
 #   endif
-#  else
+#elif __SLBF
+#   define READ_DATA_PENDING(fp) (fp->_r > 0)
+#elif STDSTDIO
+#   define READ_DATA_PENDING(fp) (fp->_cnt != 0)
+#else
 --------------> You Lose <--------------
-#  endif
-# endif
 #endif
 
 static VALUE
@@ -968,7 +963,7 @@ Fselect(argc, argv, obj)
     int i, max = 0, n;
     int interrupt = 0;
 
-    rb_scan_args(argc, argv, argv, "13", &read, &write, &except, &timeout);
+    rb_scan_args(argc, argv, "13", &read, &write, &except, &timeout);
     if (timeout) {
 	tp = time_timeval(timeout);
     }
@@ -986,7 +981,7 @@ Fselect(argc, argv, obj)
 	for (i=0; i<RARRAY(read)->len; i++) {
 	    GetOpenFile(RARRAY(read)->ptr[i], fptr);
 	    FD_SET(fileno(fptr->f), rp);
-	    if (READ_PENDING(fptr->f)) { /* check for buffered data */
+	    if (READ_DATA_PENDING(fptr->f)) { /* check for buffered data */
 		pending++;
 		FD_SET(fileno(fptr->f), &pset);
 	    }
@@ -1395,7 +1390,13 @@ Init_IO()
     rb_defout = rb_stdout;
     rb_define_variable("$>", &rb_defout, Qnil, io_defset, 0);
 
+    rb_define_const(C_Object, "STDIN", rb_stdin);
+    rb_define_const(C_Object, "STDOUT", rb_stdout);
+    rb_define_const(C_Object, "STDERR", rb_stderr);
+
     argf = obj_alloc(C_Object);
+    rb_extend_object(argf, M_Enumerable);
+
     rb_define_variable("$<", &argf, Qnil, rb_readonly_hook, 0);
     rb_define_variable("$ARGF", &argf, Qnil, rb_readonly_hook, 0);
 
@@ -1412,7 +1413,6 @@ Init_IO()
     rb_define_single_method(argf, "to_s", Farg_filename, 0);
     rb_define_single_method(argf, "filename", Farg_filename, 0);
     rb_define_single_method(argf, "file", Farg_file, 0);
-    rb_include_module(CLASS_OF(argf), M_Enumerable);
 
     filename = str_new2("-");
     rb_define_variable("$FILENAME", &filename, Qnil, rb_readonly_hook, 0);

@@ -6,14 +6,13 @@
   $Date: 1995/01/10 10:42:49 $
   created at: Mon Aug  9 18:24:49 JST 1993
 
-  Copyright (C) 1994 Yukihiro Matsumoto
+  Copyright (C) 1995 Yukihiro Matsumoto
 
 ************************************************/
 
 #include "ruby.h"
 #include "re.h"
 
-/* Generate compiled regular expressions */
 #if 'a' == 97   /* it's ascii */
 static char casetable[] = {
         '\000', '\001', '\002', '\003', '\004', '\005', '\006', '\007',
@@ -84,7 +83,7 @@ str_cicmp(str1, str2)
     return str1->len - str2->len;
 }
 
-Regexp*
+static Regexp*
 make_regexp(s, len)
 char *s;
 int len;
@@ -102,43 +101,46 @@ int len;
 
     rp = ALLOC(Regexp);
     MEMZERO((char *)rp, Regexp, 1);
-    rp->pat.buffer = ALLOC_N(char, 16);
-    rp->pat.allocated = 16;
-    rp->pat.fastmap = ALLOC_N(char, 256);
+    rp->buffer = ALLOC_N(char, 16);
+    rp->allocated = 16;
+    rp->fastmap = ALLOC_N(char, 256);
 
-    if ((err = re_compile_pattern(s, (size_t)len, &(rp->pat))) != NULL)
+    if ((err = re_compile_pattern(s, (size_t)len, rp)) != NULL)
 	Fail("%s: /%s/", err, s);
+
     return rp;
 }
 
-struct match {
-    UINT len;
-    char *ptr;
-    struct re_registers regs;
-};
-
 struct match last_match;
+VALUE ignorecase;
 
 int
-research(reg, str, start, ignorecase)
+research(reg, str, start)
     struct RRegexp *reg;
     struct RString *str;
     int start;
-    int ignorecase;
 {
     int result;
+    int casefold = ignorecase;
 
-    if (FL_TEST(reg, FL_USER1)) { /* case-flag set for the object */
-	ignorecase = FL_TEST(reg, FL_USER2); /* case-flag */
+    /* case-flag set for the object */
+    if (FL_TEST(reg, FL_USER1)) {
+	casefold = TRUE;
     }
-    if (ignorecase)
-	reg->ptr->pat.translate = casetable;
-    else
-	reg->ptr->pat.translate = NULL;
+    if (casefold) {
+	if (reg->ptr->translate != casetable) {
+	    reg->ptr->translate = casetable;
+	    reg->ptr->fastmap_accurate = 0;
+	}
+    }
+    else if (reg->ptr->translate) {
+	reg->ptr->translate = NULL;
+	reg->ptr->fastmap_accurate = 0;
+    }
 
-    if (start >= str->len) return -1;
-    result = re_search(&(reg->ptr->pat), str->ptr, str->len,
-		       start, str->len - start, &(reg->ptr->regs));
+    if (start > str->len) return -1;
+    result = re_search(reg->ptr, str->ptr, str->len,
+		       start, str->len - start, &last_match.regs);
 
     if (result >= 0) {
 	last_match.len = str->len;
@@ -150,24 +152,23 @@ research(reg, str, start, ignorecase)
 	}
 	memcpy(last_match.ptr, str->ptr, last_match.len);
 	last_match.ptr[last_match.len] = '\0';
-	last_match.regs = reg->ptr->regs;
     }
 
     return result;
 }
 
-static VALUE
-nth_match(nth)
+VALUE
+re_nth_match(nth)
     int nth;
 {
     int start, end, len;
 
-    if (nth >= RE_NREGS) {
-	Fail("match out of range %d, %d", nth, RE_NREGS);
+    if (nth >= last_match.regs.num_regs) {
+	return Qnil;
     }
-    start = last_match.regs.start[nth];
+    start = BEG(nth);
     if (start == -1) return Qnil;
-    end = last_match.regs.end[nth];
+    end = END(nth);
     len = end - start;
     return str_new(last_match.ptr + start, len);
 }
@@ -176,7 +177,7 @@ VALUE
 re_last_match(id)
     ID id;
 {
-    return nth_match(0);
+    return re_nth_match(0);
 }
 
 static VALUE
@@ -184,8 +185,8 @@ re_match_pre()
 {
     struct match *match;
 
-    if (last_match.regs.start[0] == -1) return Qnil;
-    return str_new(last_match.ptr, last_match.regs.start[0]);
+    if (BEG(0) == -1) return Qnil;
+    return str_new(last_match.ptr, BEG(0));
 }
 
 static VALUE
@@ -193,24 +194,22 @@ re_match_post()
 {
     struct match *match;
 
-    if (last_match.regs.start[0] == -1) return Qnil;
-    return str_new(last_match.ptr+last_match.regs.end[0],
-		   last_match.len-last_match.regs.end[0]);
+    if (BEG(0) == -1) return Qnil;
+    return str_new(last_match.ptr+END(0),
+		   last_match.len-END(0));
 }
 
 static VALUE
 re_match_last()
 {
-    struct match *match;
-    int i;
+    int i, len;
 
-    if (last_match.regs.start[0] == -1) return Qnil;
+    if (BEG(0) == -1) return Qnil;
 
-    for (i=0; i<RE_NREGS; i++) {
-	if (last_match.regs.start[i] == -1) break;
+    for (i=last_match.regs.num_regs-1; BEG(i) == -1 && i > 0; i--) {
     }
-    if (i == RE_NREGS) return Qnil;
-    return nth_match(i-1);
+    if (i == 0) return Qnil;
+    return re_nth_match(i);
 }
 
 static VALUE
@@ -218,7 +217,7 @@ get_match_data(id, nth)
     ID id;
     int nth;
 {
-    return nth_match(nth);
+    return re_nth_match(nth);
 }
 
 static void
@@ -226,6 +225,10 @@ free_match(data)
     struct match *data;
 {
     free(data->ptr);
+    if (data->regs.allocated > 0) {
+	free(data->regs.beg);
+	free(data->regs.end);
+    }
 }
 
 static VALUE
@@ -239,7 +242,8 @@ get_match()
     data->len = last_match.len;
     data->ptr = ALLOC_N(char, last_match.len+1);
     memcpy(data->ptr, last_match.ptr, data->len+1);
-    data->regs = last_match.regs;
+    data->regs.allocated = 0;
+    re_copy_registers(&data->regs, &last_match.regs);
 
     return data_new(data, free_match, Qnil);
 }
@@ -277,8 +281,8 @@ void
 reg_free(rp)
 Regexp *rp;
 {
-    free(rp->pat.buffer);
-    free(rp->pat.fastmap);
+    free(rp->buffer);
+    free(rp->fastmap);
     free(rp);
 }
 
@@ -289,14 +293,13 @@ const char *s;
     Fail(s);
 }
 
-VALUE ignorecase;
 VALUE C_Regexp;
 
 static VALUE
-regexp_new_1(class, s, len)
+regexp_new_1(class, s, len, ci)
     VALUE class;
     char *s;
-    int len;
+    int len, ci;
 {
     NEWOBJ(re, struct RRegexp);
     OBJSETUP(re, class, T_REGEXP);
@@ -306,15 +309,17 @@ regexp_new_1(class, s, len)
     memcpy(re->str, s, len);
     re->str[len] = '\0';
     re->len = len;
+
+    if (ci) FL_SET(re, FL_USER1);
     return (VALUE)re;
 }
 
 VALUE
-regexp_new(s, len)
+regexp_new(s, len, ci)
     char *s;
-    int len;
+    int len, ci;
 {
-    return regexp_new_1(C_Regexp, s, len);
+    return regexp_new_1(C_Regexp, s, len, ci);
 }
 
 static VALUE str_cache, reg_cache;
@@ -328,7 +333,7 @@ re_regcomp(str)
 	return reg_cache;
 
     str_cache = (VALUE)str;
-    return reg_cache = regexp_new(str->ptr, str->len);
+    return reg_cache = regexp_new(str->ptr, str->len, ignorecase);
 }
 
 VALUE
@@ -339,7 +344,7 @@ Freg_match(re, str)
     int start;
 
     Check_Type(str, T_STRING);
-    start = research(re, str, 0, ignorecase);
+    start = research(re, str, 0);
     if (start == -1) {
 	return Qnil;
     }
@@ -356,7 +361,7 @@ Freg_match2(re)
     if (TYPE(rb_lastline) != T_STRING)
 	Fail("$_ is not a string");
 
-    start = research(re, rb_lastline, 0, ignorecase);
+    start = research(re, rb_lastline, 0);
     if (start == -1) {
 	return Qnil;
     }
@@ -370,31 +375,25 @@ Sreg_new(argc, argv, self)
     VALUE self;
 {
     VALUE src, reg;
+    int ci = 0;
 
     if (argc == 0 || argc > 2) {
 	Fail("wrong # of argument");
+    }
+    if (argc == 2 && argv[1]) {
+	ci = 1;
     }
 
     src = argv[0];
     switch (TYPE(src)) {
       case T_STRING:
-	reg = regexp_new_1(self, RREGEXP(src)->ptr, RREGEXP(src)->len);
+	reg = regexp_new_1(self, RREGEXP(src)->ptr, RREGEXP(src)->len, ci);
 
       case T_REGEXP:
-	reg = regexp_new_1(self, RREGEXP(src)->str, RREGEXP(src)->len);
+	reg = regexp_new_1(self, RREGEXP(src)->str, RREGEXP(src)->len, ci);
 
       default:
 	Check_Type(src, T_STRING);
-    }
-
-    if (argc == 2) {
-	FL_SET(reg, FL_USER1);
-	if (argv[1]) {
-	    FL_SET(reg, FL_USER2);
-	}
-	else {
-	    FL_UNSET(reg, FL_USER2);
-	}
     }
 
     return Qnil;
@@ -434,7 +433,8 @@ static VALUE
 Freg_clone(re)
     struct RRegexp *re;
 {
-    return regexp_new_1(CLASS_OF(re), re->str, re->len);
+    int ci = FL_TEST(re, FL_USER1);
+    return regexp_new_1(CLASS_OF(re), re->str, re->len, ci);
 }
 
 VALUE
@@ -473,10 +473,6 @@ re_regsub(str)
 	    if (c == '\\' && (*s == '\\' || *s == '&'))
 		p = ++s;
 	} else {
-
-#define BEG(no) last_match.regs.start[no]
-#define END(no) last_match.regs.end[no]
-
 	    if (BEG(no) == -1) continue;
 	    str_cat(val, last_match.ptr+BEG(no), END(no)-BEG(no));
 	}
@@ -492,6 +488,19 @@ re_regsub(str)
     return val;
 }
 
+static VALUE
+kcode()
+{
+    switch (re_syntax_options & RE_MBCTYPE_MASK) {
+      case RE_MBCTYPE_SJIS:
+	return str_new2("SJIS");
+      case RE_MBCTYPE_EUC:
+	return str_new2("EUC");
+      default:
+	return str_new2("NONE");
+    }
+}
+
 void
 rb_set_kanjicode(code)
     char *code;
@@ -501,59 +510,46 @@ rb_set_kanjicode(code)
     switch (code[0]) {
       case 'E':
       case 'e':
-	obscure_syntax &= ~RE_MBCTYPE_MASK;
-	obscure_syntax |= RE_MBCTYPE_EUC;
+	re_syntax_options &= ~RE_MBCTYPE_MASK;
+	re_syntax_options |= RE_MBCTYPE_EUC;
 	break;
       case 'S':
       case 's':
-	obscure_syntax &= ~RE_MBCTYPE_MASK;
-	obscure_syntax |= RE_MBCTYPE_SJIS;
+	re_syntax_options &= ~RE_MBCTYPE_MASK;
+	re_syntax_options |= RE_MBCTYPE_SJIS;
 	break;
       default:
       case 'N':
       case 'n':
       set_no_conversion:
-	obscure_syntax &= ~RE_MBCTYPE_MASK;
+	re_syntax_options &= ~RE_MBCTYPE_MASK;
 	break;
     }
-    re_set_syntax(obscure_syntax);
+    re_set_syntax(re_syntax_options);
 }
 
-static VALUE
-kanji_var_get()
+void
+rb_setup_kcode()
 {
-    switch (obscure_syntax & RE_MBCTYPE_MASK) {
-      case RE_MBCTYPE_SJIS:
-	return str_new2("SJIS");
-      case RE_MBCTYPE_EUC:
-	return str_new2("EUC");
-      default:
-	return Qnil;
-    }
+    rb_define_const(C_Object, "KCODE", kcode());
 }
 
-static void
-kanji_var_set(val)
-    struct RString *val;
-{
-    if (val == Qnil) rb_set_kanjicode(Qnil);
-    Check_Type(val, T_STRING);
-    rb_set_kanjicode(val->ptr);
-}
+VALUE rb_readonly_hook();
 
 void
 Init_Regexp()
 {
     int i;
 
-    obscure_syntax = RE_NO_BK_PARENS | RE_NO_BK_VBAR
-	| RE_CONTEXT_INDEP_OPS | RE_INTERVALS
-	| RE_NO_BK_CURLY_BRACES
-	| RE_MBCTYPE_EUC;
-
-    for (i=0; i<RE_NREGS; i++) {
-	last_match.regs.start[i] = last_match.regs.end[i] = -1;
-    }
+    re_set_syntax(RE_NO_BK_PARENS | RE_NO_BK_VBAR
+		  | RE_AWK_CLASS_HACK
+		  | RE_INTERVALS
+		  | RE_NO_BK_BRACES
+		  | RE_BACKSLASH_ESCAPE_IN_LISTS
+#ifdef DEFAULT_MBCTYPE
+		  | DEFAULT_MBCTYPE
+#endif
+);
 
     rb_define_variable("$~", Qnil, get_match, set_match, 0);
 
@@ -561,18 +557,6 @@ Init_Regexp()
     rb_define_variable("$`", Qnil, re_match_pre,  Qnil, 0);
     rb_define_variable("$'", Qnil, re_match_post, Qnil, 0);
     rb_define_variable("$+", Qnil, re_match_last, Qnil, 0);
-
-    rb_define_variable("$1", Qnil, get_match_data, Qnil, 1);
-    rb_define_variable("$2", Qnil, get_match_data, Qnil, 2);
-    rb_define_variable("$3", Qnil, get_match_data, Qnil, 3);
-    rb_define_variable("$4", Qnil, get_match_data, Qnil, 4);
-    rb_define_variable("$5", Qnil, get_match_data, Qnil, 5);
-    rb_define_variable("$6", Qnil, get_match_data, Qnil, 6);
-    rb_define_variable("$7", Qnil, get_match_data, Qnil, 7);
-    rb_define_variable("$8", Qnil, get_match_data, Qnil, 8);
-    rb_define_variable("$9", Qnil, get_match_data, Qnil, 9);
-
-    rb_define_variable("$KANJI", Qnil, kanji_var_get, kanji_var_set, 0);
 
     rb_define_variable("$=", &ignorecase, Qnil, Qnil, 0);
 
