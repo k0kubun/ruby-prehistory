@@ -292,7 +292,8 @@ test -n "$verbose" && echo "	setting INSTALL_PROGRAM to $INSTALL_PROGRAM"
 INSTALL_DATA=${INSTALL_DATA-'$(INSTALL)'}
 test -n "$verbose" && echo "	setting INSTALL_DATA to $INSTALL_DATA"
 
-for hdr in unistd.h syscall.h a.out.h
+for hdr in unistd.h stdlib.h syscall.h a.out.h dirent.h\
+		string.h strings.h
 do
 trhdr=HAVE_`echo $hdr | tr '[a-z]./' '[A-Z]__'`
 echo checking for ${hdr}
@@ -544,7 +545,8 @@ fi
 rm -f conftest*
 
 
-for func in memmove mkdir strerror strftime
+for func in memmove mkdir strerror strftime\
+		 strstr strtol strtoul strdup
 do
 echo checking for ${func}
 cat > conftest.c <<EOF
@@ -574,173 +576,9 @@ rm -f conftest*
 
 done
 
-for func in strstr strtol strtoul strdup
-do
-echo checking for ${func}
-cat > conftest.c <<EOF
-#include "confdefs.h"
-#include <ctype.h>
-int main() { exit(0); }
-int t() { 
-/* The GNU C library defines this for functions which it implements
-    to always fail with ENOSYS.  Some functions are actually named
-    something starting with __ and the normal name is an alias.  */
-#if defined (__stub_${func}) || defined (__stub___${func})
-choke me
-#else
-/* Override any gcc2 internal prototype to avoid an error.  */
-extern char ${func}(); ${func}();
-#endif
- }
-EOF
-if eval $compile; then
-  :
-else
-  rm -rf conftest*
-  LIBOBJS="$LIBOBJS ${func}.o"
-test -n "$verbose" && echo "	using ${func}.o instead"
-fi
-rm -f conftest*
-
-done
-
-for func in fmod killpg socket random
-do
-trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
-echo checking for ${func}
-cat > conftest.c <<EOF
-#include "confdefs.h"
-#include <ctype.h>
-int main() { exit(0); }
-int t() { 
-/* The GNU C library defines this for functions which it implements
-    to always fail with ENOSYS.  Some functions are actually named
-    something starting with __ and the normal name is an alias.  */
-#if defined (__stub_${func}) || defined (__stub___${func})
-choke me
-#else
-/* Override any gcc2 internal prototype to avoid an error.  */
-extern char ${func}(); ${func}();
-#endif
- }
-EOF
-if eval $compile; then
-  rm -rf conftest*
-  {
-test -n "$verbose" && \
-echo "	defining ${trfunc}"
-echo "#define" ${trfunc} 1 >> confdefs.h
-DEFS="$DEFS -D${trfunc}=1"
-}
-
-
-fi
-rm -f conftest*
-done
-
-for func in wait4 waitpid syscall getcwd
-do
-trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
-echo checking for ${func}
-cat > conftest.c <<EOF
-#include "confdefs.h"
-#include <ctype.h>
-int main() { exit(0); }
-int t() { 
-/* The GNU C library defines this for functions which it implements
-    to always fail with ENOSYS.  Some functions are actually named
-    something starting with __ and the normal name is an alias.  */
-#if defined (__stub_${func}) || defined (__stub___${func})
-choke me
-#else
-/* Override any gcc2 internal prototype to avoid an error.  */
-extern char ${func}(); ${func}();
-#endif
- }
-EOF
-if eval $compile; then
-  rm -rf conftest*
-  {
-test -n "$verbose" && \
-echo "	defining ${trfunc}"
-echo "#define" ${trfunc} 1 >> confdefs.h
-DEFS="$DEFS -D${trfunc}=1"
-}
-
-
-fi
-rm -f conftest*
-done
-
-for func in setruid seteuid setreuid
-do
-trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
-echo checking for ${func}
-cat > conftest.c <<EOF
-#include "confdefs.h"
-#include <ctype.h>
-int main() { exit(0); }
-int t() { 
-/* The GNU C library defines this for functions which it implements
-    to always fail with ENOSYS.  Some functions are actually named
-    something starting with __ and the normal name is an alias.  */
-#if defined (__stub_${func}) || defined (__stub___${func})
-choke me
-#else
-/* Override any gcc2 internal prototype to avoid an error.  */
-extern char ${func}(); ${func}();
-#endif
- }
-EOF
-if eval $compile; then
-  rm -rf conftest*
-  {
-test -n "$verbose" && \
-echo "	defining ${trfunc}"
-echo "#define" ${trfunc} 1 >> confdefs.h
-DEFS="$DEFS -D${trfunc}=1"
-}
-
-
-fi
-rm -f conftest*
-done
-
-for func in setrgid setegid setregid
-do
-trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
-echo checking for ${func}
-cat > conftest.c <<EOF
-#include "confdefs.h"
-#include <ctype.h>
-int main() { exit(0); }
-int t() { 
-/* The GNU C library defines this for functions which it implements
-    to always fail with ENOSYS.  Some functions are actually named
-    something starting with __ and the normal name is an alias.  */
-#if defined (__stub_${func}) || defined (__stub___${func})
-choke me
-#else
-/* Override any gcc2 internal prototype to avoid an error.  */
-extern char ${func}(); ${func}();
-#endif
- }
-EOF
-if eval $compile; then
-  rm -rf conftest*
-  {
-test -n "$verbose" && \
-echo "	defining ${trfunc}"
-echo "#define" ${trfunc} 1 >> confdefs.h
-DEFS="$DEFS -D${trfunc}=1"
-}
-
-
-fi
-rm -f conftest*
-done
-
-for func in getpriority sigprocmask
+for func in fmod killpg socket random wait4 waitpid syscall getcwd\
+	      setruid seteuid setreuid setrgid setegid setregid\
+	      getpriority sigprocmask
 do
 trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
 echo checking for ${func}
@@ -1502,6 +1340,29 @@ rm -f conftest*
 LIBS="${LIBS_save}"
 if test -n "${have_lib}"; then
    :; LIBS="$LIBS -lsocket"
+else
+   :; 
+fi
+
+LIBS_save="${LIBS}"
+LIBS="${LIBS} -lcrypt"
+have_lib=""
+echo checking for -lcrypt
+cat > conftest.c <<EOF
+#include "confdefs.h"
+
+int main() { exit(0); }
+int t() { main(); }
+EOF
+if eval $compile; then
+  rm -rf conftest*
+  have_lib="1"
+
+fi
+rm -f conftest*
+LIBS="${LIBS_save}"
+if test -n "${have_lib}"; then
+   :; LIBS="$LIBS -lcrypt"
 else
    :; 
 fi
