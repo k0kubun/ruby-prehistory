@@ -674,7 +674,7 @@ test -z "$INSTALL_PROGRAM" && INSTALL_PROGRAM='${INSTALL}'
 test -z "$INSTALL_DATA" && INSTALL_DATA='${INSTALL} -m 644'
 
 for ac_hdr in unistd.h stdlib.h syscall.h a.out.h dirent.h\
-		string.h
+		string.h utime.h
 do
 ac_safe=`echo "$ac_hdr" | tr './\055' '___'`
 echo $ac_n "checking for $ac_hdr""... $ac_c" 1>&6
@@ -1445,7 +1445,7 @@ done
 
 for ac_func in fmod killpg socket random wait4 waitpid syscall getcwd\
 	      setruid seteuid setreuid setrgid setegid setregid\
-	      getpriority sigprocmask dlopen
+	      getpriority sigprocmask dlopen utimes
 do
 echo $ac_n "checking for $ac_func""... $ac_c" 1>&6
 if eval "test \"`echo '$''{'ac_cv_func_$ac_func'+set}'`\" = set"; then
