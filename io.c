@@ -3,7 +3,7 @@
   io.c -
 
   $Author: matz $
-  $Date: 1994/11/01 08:28:01 $
+  $Date: 1994/12/06 09:30:03 $
   created at: Fri Oct 15 18:08:59 JST 1993
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -37,7 +37,7 @@ extern char *inplace;
 
 /* writing functions */
 VALUE
-Fio_write(obj, str)
+io_write(obj, str)
     VALUE obj;
     struct RString *str;
 {
@@ -74,7 +74,7 @@ static VALUE
 Fio_puts(obj, str)
     VALUE obj, str;
 {
-    Fio_write(obj, str);
+    io_write(obj, str);
     return obj;
 }
 
@@ -616,6 +616,20 @@ pipe_open(pname, mode)
 }
 
 static VALUE
+io_open(fname, mode)
+    char *fname, *mode;
+{
+    int pipe = 0;
+
+    if (fname[0] == '|') {
+	return pipe_open(fname+1, mode);
+    }
+    else {
+	return file_open(fname, mode);
+    }
+}
+
+static VALUE
 Fopen(self, args)
     VALUE self, args;
 {
@@ -635,15 +649,7 @@ Fopen(self, args)
 	    Fail("illegal access mode");
 	mode = RSTRING(pmode)->ptr;
     }
-
-    if (RSTRING(pname)->ptr[0] == '|') {
-	port = pipe_open(RSTRING(pname)->ptr+1, mode);
-    }
-    else {
-	port = file_open(RSTRING(pname)->ptr, mode);
-    }
-
-    return port;
+    return io_open(RSTRING(pname)->ptr, mode);
 }
 
 static VALUE
@@ -685,23 +691,46 @@ Fprint(argc, argv)
     else {
 	for (i=0; i<argc; i++) {
 	    if (OFS && i>0) {
-		Fio_write(rb_defout, OFS);
+		io_write(rb_defout, OFS);
 	    }
-	    rb_funcall(argv[i], id_print_on, 1, rb_defout);
+	    switch (TYPE(argv[i])) {
+	      case T_STRING:
+		io_write(rb_defout, argv[i]);
+		break;
+	      case T_ARRAY:
+		Fary_print_on(argv[i], rb_defout);
+		break;
+	      default:
+		rb_funcall(argv[i], id_print_on, 1, rb_defout);
+		break;
+	    }
 	}
     }
     if (ORS) {
-	Fio_write(rb_defout, ORS);
+	io_write(rb_defout, ORS);
     }
 
     return Qnil;
 }
 
 static VALUE
+io_defset(obj, val)
+    VALUE obj, val;
+{
+    if (TYPE(val) == T_STRING) {
+	val = io_open(RSTRING(val)->ptr, "w");
+    }
+    if (!obj_is_kind_of(val, C_IO)) {
+	Fail("$< must be a file, %s given", rb_class2name(CLASS_OF(val)));
+    }
+    return rb_defout = val;
+}
+
+static VALUE
 Fprint_on(obj, port)
     VALUE obj, port;
 {
-    return Fio_write(port, obj);
+    return io_write(port, obj);
 }
 
 static VALUE
@@ -719,7 +748,7 @@ prep_stdio(f, mode)
     return obj;
 }
 
-static VALUE filename = Qnil, file = Qnil;
+static VALUE filename, file;
 static int gets_lineno;
 static int init_p = 0, next_p = 0;
 
@@ -745,7 +774,7 @@ next_argv()
     if (next_p == 1) {
 	next_p = 0;
 	if (RARRAY(Argv)->len > 0) {
-	    filename = Fary_shift(Argv);
+	    filename = ary_shift(Argv);
 	    fn = RSTRING(filename)->ptr; 
 	    if (RSTRING(filename)->len == 1 && fn[0] == '-') {
 		file = rb_stdin;
@@ -776,7 +805,6 @@ next_argv()
 			fclose(fr);
 			goto retry;
 		    }
-		    obj_free(str);
 		    fw = fopen(fn, "w");
 		    fstat(fileno(fw), &st2);
 		    fchmod(fileno(fw), st.st_mode);
@@ -842,7 +870,7 @@ Freadlines(obj)
 
     ary = ary_new();
     while (line = Fgets(obj)) {
-	Fary_push(ary, line);
+	ary_push(ary, line);
     }
 
     return ary;
@@ -875,8 +903,6 @@ rb_xstring(str)
     GetOpenFile(port, fptr);
     rb_syswait(fptr->pid);
     fptr->pid = 0;
-
-    obj_free(port);
 
     return result;
 }
@@ -1007,7 +1033,7 @@ Fselect(obj, args)
 		GetOpenFile(RARRAY(read)->ptr[i], fptr);
 		if (FD_ISSET(fileno(fptr->f), rp)
 		    || FD_ISSET(fileno(fptr->f), &pset)) {
-		    Fary_push(list, RARRAY(read)->ptr[i]);
+		    ary_push(list, RARRAY(read)->ptr[i]);
 		}
 	    }
 	}
@@ -1017,10 +1043,10 @@ Fselect(obj, args)
 	    for (i=0; i< RARRAY(write)->len; i++) {
 		GetOpenFile(RARRAY(write)->ptr[i], fptr);
 		if (FD_ISSET(fileno(fptr->f), rp)) {
-		    Fary_push(list, RARRAY(write)->ptr[i]);
+		    ary_push(list, RARRAY(write)->ptr[i]);
 		}
 		else if (fptr->f2 && FD_ISSET(fileno(fptr->f2), rp)) {
-		    Fary_push(list, RARRAY(write)->ptr[i]);
+		    ary_push(list, RARRAY(write)->ptr[i]);
 		}
 	    }
 	}
@@ -1030,10 +1056,10 @@ Fselect(obj, args)
 	    for (i=0; i< RARRAY(except)->len; i++) {
 		GetOpenFile(RARRAY(except)->ptr[i], fptr);
 		if (FD_ISSET(fileno(fptr->f), rp)) {
-		    Fary_push(list, RARRAY(except)->ptr[i]);
+		    ary_push(list, RARRAY(except)->ptr[i]);
 		}
 		else if (fptr->f2 && FD_ISSET(fileno(fptr->f2), rp)) {
-		    Fary_push(list, RARRAY(except)->ptr[i]);
+		    ary_push(list, RARRAY(except)->ptr[i]);
 		}
 	    }
 	}
@@ -1073,7 +1099,7 @@ io_ctl(obj, req, arg, io_p)
     }
     arg->ptr[len] = 17;
     fd = fileno(fptr->f);
-    if (io_p?ioctl(fd, cmd, arg->ptr):fcntl(fd, cmd, arg->ptr)<0) {
+    if ((io_p?ioctl(fd, cmd, arg->ptr):fcntl(fd, cmd, arg->ptr))<0) {
 	rb_sys_fail(fptr->path);
     }
     if (arg->ptr[len] != 17) {
@@ -1088,20 +1114,6 @@ Fio_ioctl(obj, req, arg)
 {
     io_ctl(obj, req, arg, 1);
     return obj;
-}
-
-static VALUE
-Fio_defget(obj)
-    VALUE obj;
-{
-    return rb_defout;
-}
-
-static VALUE
-Fio_defset(obj, val)
-    VALUE obj, val;
-{
-    return rb_defout = val;
 }
 
 static VALUE
@@ -1261,9 +1273,15 @@ Farg_each_byte()
 }
 
 static VALUE
-Farg_to_s()
+Farg_filename()
 {
-    return str_new2("$ARGF");
+    return filename;
+}
+
+static VALUE
+Farg_file()
+{
+    return file;
 }
 
 extern VALUE M_Enumerable;
@@ -1302,9 +1320,6 @@ Init_IO()
     rb_define_variable("$/",  &RS, Qnil, rb_check_str);
     rb_define_variable("$\\", &ORS, Qnil, rb_check_str);
 
-    rb_define_variable("$FILENAME", &filename, Qnil, rb_readonly_hook);
-    rb_global_variable(&file);
-
     rb_define_variable("$.", &lineno, Qnil, Qnil);
     rb_define_variable("$_", &rb_lastline, Qnil, Qnil);
 
@@ -1323,7 +1338,7 @@ Init_IO()
     rb_define_alias(C_IO, "readlines", "to_a");
 
     rb_define_method(C_IO, "read",  Fio_read, -2);
-    rb_define_method(C_IO, "write", Fio_write, 1);
+    rb_define_method(C_IO, "write", io_write, 1);
     rb_define_method(C_IO, "gets",  Fio_gets, 0);
     rb_define_alias(C_IO,  "readline", "gets");
     rb_define_method(C_IO, "getc",  Fio_getc, 0);
@@ -1346,11 +1361,10 @@ Init_IO()
     rb_stderr = prep_stdio(stderr, FMODE_WRITABLE);
     rb_define_variable("$stderr", &rb_stderr, Qnil, rb_readonly_hook);
     rb_defout = rb_stdout;
-    rb_global_variable(&rb_defout);
-    rb_define_single_method(C_IO, "default", Fio_defget, 0);
-    rb_define_single_method(C_IO, "default=", Fio_defset, 1);
+    rb_define_variable("$>", &rb_defout, Qnil, io_defset);
 
     argf = obj_alloc(C_Object);
+    rb_define_variable("$<", &argf, Qnil, rb_readonly_hook);
     rb_define_variable("$ARGF", &argf, Qnil, rb_readonly_hook);
 
     rb_define_single_method(argf, "each",  Farg_each, 0);
@@ -1359,12 +1373,19 @@ Init_IO()
     rb_define_single_method(argf, "read",  Farg_read, 0);
     rb_define_single_method(argf, "readlines", Freadlines, 0);
     rb_define_single_method(argf, "gets", Fgets, 0);
-    rb_define_single_method(argf, "realine", Fgets, 0);
+    rb_define_single_method(argf, "readline", Fgets, 0);
     rb_define_single_method(argf, "getc", Farg_getc, 0);
     rb_define_single_method(argf, "eof", Feof, 0);
 
-    rb_define_single_method(argf, "to_s", Farg_to_s, 0);
+    rb_define_single_method(argf, "to_s", Farg_filename, 0);
+    rb_define_single_method(argf, "filename", Farg_filename, 0);
+    rb_define_single_method(argf, "file", Farg_file, 0);
     rb_include_module(CLASS_OF(argf), M_Enumerable);
+
+    filename = str_new2("-");
+    rb_define_variable("$FILENAME", &filename, Qnil, rb_readonly_hook);
+    file = rb_stdin;
+    rb_global_variable(&file);
 
     Init_File();
 }

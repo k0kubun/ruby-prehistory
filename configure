@@ -217,9 +217,6 @@ rm -f conftest*
   test -n "$need_trad" && CC="$CC -traditional"
 fi
 
-if test "$GCC" = 1 ; then
-  DBM=-fpcc-struct-return
-fi
 if test "$HOSTTYPE" = sparc; then
   if test "$GCC" = 1 ; then
     STATIC=-static
@@ -547,9 +544,8 @@ fi
 rm -f conftest*
 
 
-for func in getopt_long memmove strerror strtoul strdup strstr
+for func in memmove mkdir strerror strftime
 do
-trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
 echo checking for ${func}
 cat > conftest.c <<EOF
 #include "confdefs.h"
@@ -568,20 +564,47 @@ extern char ${func}(); ${func}();
  }
 EOF
 if eval $compile; then
+  :
+else
   rm -rf conftest*
-  {
-test -n "$verbose" && \
-echo "	defining ${trfunc}"
-echo "#define" ${trfunc} 1 >> confdefs.h
-DEFS="$DEFS -D${trfunc}=1"
-}
-
-
+  LIBOBJS="$LIBOBJS ${func}.o"
+test -n "$verbose" && echo "	using ${func}.o instead"
 fi
 rm -f conftest*
+
 done
 
-for func in setenv fmod killpg mkdir strftime socket random
+for func in strstr strtol strtoul strdup
+do
+echo checking for ${func}
+cat > conftest.c <<EOF
+#include "confdefs.h"
+#include <ctype.h>
+int main() { exit(0); }
+int t() { 
+/* The GNU C library defines this for functions which it implements
+    to always fail with ENOSYS.  Some functions are actually named
+    something starting with __ and the normal name is an alias.  */
+#if defined (__stub_${func}) || defined (__stub___${func})
+choke me
+#else
+/* Override any gcc2 internal prototype to avoid an error.  */
+extern char ${func}(); ${func}();
+#endif
+ }
+EOF
+if eval $compile; then
+  :
+else
+  rm -rf conftest*
+  LIBOBJS="$LIBOBJS ${func}.o"
+test -n "$verbose" && echo "	using ${func}.o instead"
+fi
+rm -f conftest*
+
+done
+
+for func in fmod killpg socket random
 do
 trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
 echo checking for ${func}
@@ -649,6 +672,74 @@ fi
 rm -f conftest*
 done
 
+for func in setruid seteuid setreuid
+do
+trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
+echo checking for ${func}
+cat > conftest.c <<EOF
+#include "confdefs.h"
+#include <ctype.h>
+int main() { exit(0); }
+int t() { 
+/* The GNU C library defines this for functions which it implements
+    to always fail with ENOSYS.  Some functions are actually named
+    something starting with __ and the normal name is an alias.  */
+#if defined (__stub_${func}) || defined (__stub___${func})
+choke me
+#else
+/* Override any gcc2 internal prototype to avoid an error.  */
+extern char ${func}(); ${func}();
+#endif
+ }
+EOF
+if eval $compile; then
+  rm -rf conftest*
+  {
+test -n "$verbose" && \
+echo "	defining ${trfunc}"
+echo "#define" ${trfunc} 1 >> confdefs.h
+DEFS="$DEFS -D${trfunc}=1"
+}
+
+
+fi
+rm -f conftest*
+done
+
+for func in setrgid setegid setregid
+do
+trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
+echo checking for ${func}
+cat > conftest.c <<EOF
+#include "confdefs.h"
+#include <ctype.h>
+int main() { exit(0); }
+int t() { 
+/* The GNU C library defines this for functions which it implements
+    to always fail with ENOSYS.  Some functions are actually named
+    something starting with __ and the normal name is an alias.  */
+#if defined (__stub_${func}) || defined (__stub___${func})
+choke me
+#else
+/* Override any gcc2 internal prototype to avoid an error.  */
+extern char ${func}(); ${func}();
+#endif
+ }
+EOF
+if eval $compile; then
+  rm -rf conftest*
+  {
+test -n "$verbose" && \
+echo "	defining ${trfunc}"
+echo "#define" ${trfunc} 1 >> confdefs.h
+DEFS="$DEFS -D${trfunc}=1"
+}
+
+
+fi
+rm -f conftest*
+done
+
 for func in getpriority sigprocmask
 do
 trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
@@ -683,12 +774,30 @@ fi
 rm -f conftest*
 done
 
-if echo $DEFS | grep "HAVE_SETENV" 2>&1 > /dev/null; then
+echo checking for setenv
+cat > conftest.c <<EOF
+#include "confdefs.h"
+#include <ctype.h>
+int main() { exit(0); }
+int t() { 
+/* The GNU C library defines this for functions which it implements
+    to always fail with ENOSYS.  Some functions are actually named
+    something starting with __ and the normal name is an alias.  */
+#if defined (__stub_setenv) || defined (__stub___setenv)
+choke me
+#else
+/* Override any gcc2 internal prototype to avoid an error.  */
+extern char setenv(); setenv();
+#endif
+ }
+EOF
+if eval $compile; then
   :
 else
+  rm -rf conftest*
   for func in putenv
 do
-trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
+trfunc=HAVE_`echo $func | tr 'a-z' 'A-Z'`
 echo checking for ${func}
 cat > conftest.c <<EOF
 #include "confdefs.h"
@@ -721,10 +830,13 @@ rm -f conftest*
 done
 
 fi
-if echo $DEFS | grep "HAVE_STRFTIME" 2>&1 > /dev/null; then
-  :
-else
-  echo checking for struct tm in time.h
+rm -f conftest*
+
+
+case "$LIBOBJS" in
+ *) ;;
+ *strftime*)
+    echo checking for struct tm in time.h
 cat > conftest.c <<EOF
 #include "confdefs.h"
 #include <sys/types.h>
@@ -808,7 +920,7 @@ rm -f conftest*
 
 fi
 
-  echo checking for daylight
+    echo checking for daylight
 cat > conftest.c <<EOF
 #include "confdefs.h"
 
@@ -828,8 +940,9 @@ DEFS="$DEFS -DHAVE_DAYLIGHT=1"
 
 fi
 rm -f conftest*
+;;
+esac
 
-fi
 # The Ultrix 4.2 mips builtin alloca declared by alloca.h only works
 # for constant arguments.  Useless!
 echo checking for working alloca.h
@@ -1437,14 +1550,13 @@ trap 'rm -f Makefile; exit 1' 1 3 15
 PROGS='$PROGS'
 CC='$CC'
 CPP='$CPP'
-DBM='$DBM'
 STATIC='$STATIC'
 YACC='$YACC'
 INSTALL='$INSTALL'
 INSTALL_PROGRAM='$INSTALL_PROGRAM'
 INSTALL_DATA='$INSTALL_DATA'
-ALLOCA='$ALLOCA'
 LIBOBJS='$LIBOBJS'
+ALLOCA='$ALLOCA'
 LIBS='$LIBS'
 srcdir='$srcdir'
 DEFS='$DEFS'
@@ -1475,14 +1587,13 @@ $extrasub
 s%@PROGS@%$PROGS%g
 s%@CC@%$CC%g
 s%@CPP@%$CPP%g
-s%@DBM@%$DBM%g
 s%@STATIC@%$STATIC%g
 s%@YACC@%$YACC%g
 s%@INSTALL@%$INSTALL%g
 s%@INSTALL_PROGRAM@%$INSTALL_PROGRAM%g
 s%@INSTALL_DATA@%$INSTALL_DATA%g
-s%@ALLOCA@%$ALLOCA%g
 s%@LIBOBJS@%$LIBOBJS%g
+s%@ALLOCA@%$ALLOCA%g
 s%@LIBS@%$LIBS%g
 s%@srcdir@%$srcdir%g
 s%@DEFS@%$DEFS%
@@ -1495,3 +1606,4 @@ EOF
 chmod +x config.status
 ${CONFIG_SHELL-/bin/sh} config.status
 
+mv confdefs.h config.h

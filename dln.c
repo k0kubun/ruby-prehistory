@@ -3,7 +3,7 @@
   dln.c -
 
   $Author: matz $
-  $Date: 1994/10/14 06:19:13 $
+  $Date: 1994/11/18 01:37:28 $
   created at: Tue Jan 18 17:05:06 JST 1994
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <sys/param.h>
 #include <sys/file.h>
+#include "config.h"
 #include "defines.h"
 #include "dln.h"
 #include <sys/types.h>
