@@ -3,7 +3,7 @@
   array.c -
 
   $Author: matz $
-  $Date: 1994/08/12 11:06:34 $
+  $Date: 1994/10/14 06:19:01 $
   created at: Fri Aug  6 09:46:12 JST 1993
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -456,6 +456,17 @@ Fary_each(ary)
 }
 
 static VALUE
+Fary_each_index(ary)
+    struct RArray *ary;
+{
+    int i;
+
+    for (i=0; i<ary->len; i++) {
+	rb_yield(INT2FIX(i));
+    }
+}
+
+static VALUE
 Fary_length(ary)
     struct RArray *ary;
 {
@@ -870,6 +881,7 @@ Init_Array()
     rb_define_method(C_Array, "shift", Fary_shift, 0);
     rb_define_method(C_Array, "unshift", Fary_unshift, 1);
     rb_define_method(C_Array, "each", Fary_each, 0);
+    rb_define_method(C_Array, "each_index", Fary_each_index, 0);
     rb_define_method(C_Array, "length", Fary_length, 0);
     rb_define_alias(C_Array,  "size", "length");
     rb_define_method(C_Array, "index", Fary_index, 1);

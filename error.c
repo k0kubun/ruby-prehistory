@@ -3,7 +3,7 @@
   error.c -
 
   $Author: matz $
-  $Date: 1994/08/12 04:47:21 $
+  $Date: 1994/10/14 06:19:16 $
   created at: Mon Aug  9 16:11:34 JST 1993
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -40,7 +40,7 @@ err_print(fmt, args)
     char buf[BUFSIZ];
 
     err_sprintf(buf, fmt, args);
-    if (the_env->in_eval) {
+    if (rb_in_eval) {
 	if (errstr == Qnil) {
 	    errstr = str_new2(buf);
 	}

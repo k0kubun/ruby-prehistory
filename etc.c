@@ -3,7 +3,7 @@
   etc.c -
 
   $Author: matz $
-  $Date: 1994/08/24 09:25:27 $
+  $Date: 1994/10/14 06:19:17 $
   created at: Tue Mar 22 18:39:19 JST 1994
 
 ************************************************/
@@ -178,15 +178,13 @@ Init_Etc()
 {
     M_Etc = rb_define_module("Etc");
 
-    rb_define_method(M_Etc, "getlogin", Fetc_getlogin, 0);
+    rb_define_module_function(M_Etc, "getlogin", Fetc_getlogin, 0);
 
-    rb_define_method(M_Etc, "getpwuid", Fetc_getpwuid, -2);
-    rb_define_method(M_Etc, "getpwnam", Fetc_getpwnam, 1);
-    rb_define_method(M_Etc, "passwd", Fetc_passwd, 0);
+    rb_define_module_function(M_Etc, "getpwuid", Fetc_getpwuid, -2);
+    rb_define_module_function(M_Etc, "getpwnam", Fetc_getpwnam, 1);
+    rb_define_module_function(M_Etc, "passwd", Fetc_passwd, 0);
 
-    rb_define_method(M_Etc, "getgrgid", Fetc_getgrgid, 1);
-    rb_define_method(M_Etc, "getgrnam", Fetc_getgrnam, 1);
-    rb_define_method(M_Etc, "group", Fetc_group, 0);
-
-    rb_include_module(CLASS_OF(M_Etc), M_Etc);
+    rb_define_module_function(M_Etc, "getgrgid", Fetc_getgrgid, 1);
+    rb_define_module_function(M_Etc, "getgrnam", Fetc_getgrnam, 1);
+    rb_define_module_function(M_Etc, "group", Fetc_group, 0);
 }

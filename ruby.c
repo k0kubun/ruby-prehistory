@@ -3,7 +3,7 @@
   ruby.c -
 
   $Author: matz $
-  $Date: 1994/08/24 09:25:34 $
+  $Date: 1994/10/14 06:19:43 $
   created at: Tue Aug 10 12:47:31 JST 1993
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -176,24 +176,7 @@ proc_options(argcp, argvp)
 	    break;
 
 	  case 'C':
-	    switch (optarg[0]) {
-	      case 'E':
-	      case 'e':
-		obscure_syntax &= ~RE_MBCTYPE_MASK;
-		obscure_syntax |= RE_MBCTYPE_EUC;
-		break;
-	      case 'S':
-	      case 's':
-		obscure_syntax &= ~RE_MBCTYPE_MASK;
-		obscure_syntax |= RE_MBCTYPE_SJIS;
-		break;
-	      default:
-	      case 'N':
-	      case 'n':
-		obscure_syntax &= ~RE_MBCTYPE_MASK;
-		break;
-	    }
-	    re_set_syntax(obscure_syntax);
+	    rb_set_kanjicode(optarg);
 	    break;
 
 	  case 'S':

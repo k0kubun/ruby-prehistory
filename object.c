@@ -3,7 +3,7 @@
   object.c -
 
   $Author: matz $
-  $Date: 1994/08/12 04:47:42 $
+  $Date: 1994/10/14 10:00:56 $
   created at: Thu Jul 15 12:01:24 JST 1993
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -22,20 +22,14 @@ VALUE C_Module;
 VALUE C_Class;
 VALUE C_Nil;
 VALUE C_Data;
-VALUE C_Method;
 
 struct st_table *new_idhash();
 
 VALUE Fsprintf();
-VALUE Fexit();
-VALUE Feval();
-VALUE Fapply();
 VALUE Fdefined();
-VALUE Fcaller();
 
 VALUE obj_responds_to();
 VALUE obj_alloc();
-VALUE Ffix_clone();
 
 static ID eq, match;
 
@@ -59,13 +53,6 @@ Fkrn_equal(obj, other)
 {
     if (obj == other) return TRUE;
     return FALSE;
-}
-
-static VALUE
-Fkrn_hash(obj)
-    VALUE obj;
-{
-    return obj;
 }
 
 static VALUE
@@ -228,13 +215,6 @@ Fobj_clone(obj)
 }
 
 static VALUE
-Fiterator_p()
-{
-    if (the_env->iterator > 1 && the_env->iterator < 4) return TRUE;
-    return FALSE;
-}
-
-static VALUE
 Fnil_to_s(obj)
     VALUE obj;
 {
@@ -317,6 +297,45 @@ Fcls_attr(class, args)
 }
 
 static VALUE
+Fcls_export_internal(argc, argv, ex)
+    int argc;
+    VALUE *argv;
+    int ex;
+{
+    VALUE self = Qself;
+    int i;
+    ID id;
+
+    for (i=0; i<argc; i++) {
+	if (FIXNUM_P(argv[i])) {
+	    id = FIX2INT(argv[i]);
+	}
+	else {
+	    Check_Type(argv[i], T_STRING);
+	    id = rb_intern(RSTRING(argv[i])->ptr);
+	}
+	rb_export_method(self, id, ex);
+    }
+    return Qnil;
+}
+
+static VALUE
+Fcls_export(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    Fcls_export_internal(argc, argv, 0);
+}
+
+static VALUE
+Fcls_unexport(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    Fcls_export_internal(argc, argv, 1);
+}
+
+static VALUE
 Fcant_clone(obj)
     VALUE obj;
 {
@@ -368,7 +387,7 @@ Init_Object()
      *	|       |  |         |  |		    |
      *	|   +---+  +----+    |  +---+		    |
      *	|   |     +-----|----+      |		    |
-     *	|   |     |     |           |		    |
+     *	|   |     |     |           |               |
      * 	+->Nil->(Nil) Object---->(Object)	    |
      *	   	       ^ ^         ^  ^	            |
      *	   	       | |         |  |	            |
@@ -391,7 +410,7 @@ Init_Object()
     rb_define_method(C_Kernel, "!", P_false, 0);
     rb_define_method(C_Kernel, "==", Fkrn_equal, 1);
     rb_define_alias(C_Kernel, "equal", "==");
-    rb_define_method(C_Kernel, "hash", Fkrn_hash, 0);
+    rb_define_method(C_Kernel, "hash", rb_self, 0);
     rb_define_method(C_Kernel, "id", Fkrn_id, 0);
     rb_define_method(C_Kernel, "class", Fkrn_class, 0);
     rb_define_method(C_Kernel, "!=", Fkrn_noteq, 1);
@@ -402,17 +421,9 @@ Init_Object()
     rb_define_method(C_Kernel, "to_s", Fkrn_to_s, 0);
     rb_define_method(C_Kernel, "_inspect", Fkrn_inspect, 0);
 
-#ifdef USE_CALLER
-    rb_define_method(C_Kernel, "caller", Fcaller, -2);
-#endif
-    rb_define_method(C_Kernel, "exit", Fexit, -2);
-    rb_define_method(C_Kernel, "eval", Feval, 1);
-    rb_define_method(C_Kernel, "defined", Fdefined, 1);
-    rb_define_method(C_Kernel, "sprintf", Fsprintf, -1);
+    rb_define_private_method(C_Kernel, "defined", Fdefined, 1);
+    rb_define_private_method(C_Kernel, "sprintf", Fsprintf, -1);
     rb_define_alias(C_Kernel, "format", "sprintf");
-    rb_define_method(C_Kernel, "iterator_p", Fiterator_p, 0);
-
-    rb_define_method(C_Kernel, "apply", Fapply, -2);
 
     rb_define_method(C_Object, "_inspect", Fobj_inspect, 0);
 
@@ -423,13 +434,15 @@ Init_Object()
 
     rb_define_method(C_Module, "to_s", Fcls_to_s, 0);
     rb_define_method(C_Module, "clone", Fcant_clone, 0);
-    rb_define_method(C_Module, "attr", Fcls_attr, -2);
+    rb_define_private_method(C_Module, "attr", Fcls_attr, -2);
+    rb_define_method(C_Module, "export", Fcls_export, -1);
+    rb_define_method(C_Module, "unexport", Fcls_unexport, -1);
 
     rb_define_method(C_Class, "new", Fcls_new, -2);
 
     C_Nil = rb_define_class("Nil", C_Kernel);
     rb_define_method(C_Nil, "to_s", Fnil_to_s, 0);
-    rb_define_method(C_Nil, "clone", Ffix_clone, 0);
+    rb_define_method(C_Nil, "clone", rb_self, 0);
     rb_define_method(C_Nil, "class", Fnil_class, 0);
 
     rb_define_method(C_Nil, "is_nil", P_true, 0);
@@ -441,9 +454,6 @@ Init_Object()
     C_Data = rb_define_class("Data", C_Kernel);
     rb_define_method(C_Data, "clone", Fcant_clone, 0);
     rb_define_method(C_Data, "class", Fdata_class, 0);
-
-    C_Method = rb_define_class("Method", C_Kernel);
-    rb_define_method(C_Method, "clone", Fcant_clone, 0);
 
     eq = rb_intern("==");
     match = rb_intern("=~");

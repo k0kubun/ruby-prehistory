@@ -4,7 +4,7 @@
   file.c -
 
   $Author: matz $
-  $Date: 1994/08/18 07:06:21 $
+  $Date: 1994/10/14 06:19:20 $
   created at: Mon Nov 15 12:24:34 JST 1993
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -1064,8 +1064,6 @@ Init_File()
 
     C_File = rb_define_class("File", C_IO);
 
-    rb_include_module(CLASS_OF(C_File), M_FileTest);
-
     rb_define_single_method(C_File, "stat",  Ffile_stat, 1);
     rb_define_single_method(C_File, "lstat", Ffile_lstat, 1);
     rb_define_single_method(C_File, "type",  Ffile_type, 1);
@@ -1087,6 +1085,8 @@ Init_File()
     rb_define_single_method(C_File, "rename", Ffile_rename, 2);
     rb_define_single_method(C_File, "umask", Ffile_umask, -1);
     rb_define_single_method(C_File, "truncate", Ffile_truncate, 2);
+
+    rb_include_module(CLASS_OF(C_File), M_FileTest);
 
     rb_define_method(C_File, "stat",  Ffile_stat2, 0);
     rb_define_method(C_File, "lstat",  Ffile_lstat2, 0);

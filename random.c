@@ -3,7 +3,7 @@
   random.c -
 
   $Author: matz $
-  $Date: 1994/08/12 04:47:48 $
+  $Date: 1994/10/14 10:00:59 $
   created at: Fri Dec 24 16:39:21 JST 1993
 
   Copyright (C) 1994 Yukihiro Matsumoto
@@ -75,6 +75,6 @@ Init_Random()
 {
     extern VALUE C_Kernel;
 
-    rb_define_method(C_Kernel, "srand", Fsrand, -2);
-    rb_define_method(C_Kernel, "rand", Frand, 1);
+    rb_define_private_method(C_Kernel, "srand", Fsrand, -2);
+    rb_define_private_method(C_Kernel, "rand", Frand, 1);
 }

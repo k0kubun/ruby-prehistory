@@ -3,7 +3,7 @@
   bignum.c -
 
   $Author: matz $
-  $Date: 1994/08/12 04:47:06 $
+  $Date: 1994/10/14 06:19:03 $
   created at: Fri Jun 10 00:48:55 JST 1994
 
 ************************************************/
@@ -1075,7 +1075,7 @@ Init_Bignum()
 {
     C_Bignum = rb_define_class("Bignum", C_Integer);
     rb_define_single_method(C_Bignum, "new", Fbig_new, 1);
-    rb_define_method(C_Bignum, "clone", Fbig_clone, 0);
+
     rb_define_method(C_Bignum, "to_s", Fbig_to_s, 0);
     rb_define_method(C_Bignum, "coerce", Fbig_coerce, 1);
     rb_define_method(C_Bignum, "-@", Fbig_uminus, 0);
