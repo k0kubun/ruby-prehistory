@@ -1,4 +1,3 @@
-
 #!/bin/sh
 # Guess values for system-dependent variables and create Makefiles.
 # Generated automatically using autoconf.
@@ -218,11 +217,11 @@ rm -f conftest*
   test -n "$need_trad" && CC="$CC -traditional"
 fi
 
-if test $GCC -eq 1 ; then
+if test "$GCC" = 1 ; then
   DBM=-fpcc-struct-return
 fi
 if test "$HOSTTYPE" = sparc; then
-  if test $GCC -eq 1 ; then
+  if test "$GCC" = 1 ; then
     STATIC=-static
   else
     STATIC=-Bstatic
@@ -616,7 +615,41 @@ fi
 rm -f conftest*
 done
 
-for func in wait4 waitpid syscall
+for func in wait4 waitpid syscall getcwd
+do
+trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
+echo checking for ${func}
+cat > conftest.c <<EOF
+#include "confdefs.h"
+#include <ctype.h>
+int main() { exit(0); }
+int t() { 
+/* The GNU C library defines this for functions which it implements
+    to always fail with ENOSYS.  Some functions are actually named
+    something starting with __ and the normal name is an alias.  */
+#if defined (__stub_${func}) || defined (__stub___${func})
+choke me
+#else
+/* Override any gcc2 internal prototype to avoid an error.  */
+extern char ${func}(); ${func}();
+#endif
+ }
+EOF
+if eval $compile; then
+  rm -rf conftest*
+  {
+test -n "$verbose" && \
+echo "	defining ${trfunc}"
+echo "#define" ${trfunc} 1 >> confdefs.h
+DEFS="$DEFS -D${trfunc}=1"
+}
+
+
+fi
+rm -f conftest*
+done
+
+for func in getpriority sigprocmask
 do
 trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
 echo checking for ${func}
@@ -780,7 +813,7 @@ cat > conftest.c <<EOF
 #include "confdefs.h"
 
 int main() { exit(0); }
-int t() { extern int daylight; int i; i = daylight; }
+int t() { extern int daylight; int i = daylight; }
 EOF
 if eval $compile; then
   rm -rf conftest*
@@ -1138,6 +1171,27 @@ test -n "$verbose" && \
 echo "	defining HAVE_ST_RDEV"
 echo "#define" HAVE_ST_RDEV 1 >> confdefs.h
 DEFS="$DEFS -DHAVE_ST_RDEV=1"
+}
+
+
+fi
+rm -f conftest*
+
+echo checking for std stdio
+cat > conftest.c <<EOF
+#include "confdefs.h"
+#include <stdio.h>
+int main() { exit(0); }
+int t() { stdin->_cnt > 0; }
+EOF
+if eval $compile; then
+  rm -rf conftest*
+  
+{
+test -n "$verbose" && \
+echo "	defining STDSTDIO"
+echo "#define" STDSTDIO 1 >> confdefs.h
+DEFS="$DEFS -DSTDSTDIO=1"
 }
 
 
