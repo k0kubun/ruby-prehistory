@@ -616,7 +616,7 @@ fi
 rm -f conftest*
 done
 
-for func in wait4 waitpid
+for func in wait4 waitpid syscall
 do
 trfunc=HAVE_`echo $func | tr '[a-z]' '[A-Z]'`
 echo checking for ${func}
@@ -780,7 +780,7 @@ cat > conftest.c <<EOF
 #include "confdefs.h"
 
 int main() { exit(0); }
-int t() { extern int daylight; daylight; }
+int t() { extern int daylight; int i; i = daylight; }
 EOF
 if eval $compile; then
   rm -rf conftest*
